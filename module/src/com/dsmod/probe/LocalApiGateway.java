@@ -689,12 +689,14 @@ abstract class LocalApiGateway {
 
     static JSONObject modelsPayload() {
         JSONObject root = new JSONObject();
-        JSONArray data = new JSONArray();
-        data.put(modelEntry(DEFAULT_MODEL, "chat"));
-        data.put(modelEntry(REASONER_MODEL, "reasoning"));
-        data.put(modelEntry(EXPERT_MODEL, "expert"));
-        root.put("object", "list");
-        root.put("data", data);
+        try {
+            JSONArray data = new JSONArray();
+            data.put(modelEntry(DEFAULT_MODEL, "chat"));
+            data.put(modelEntry(REASONER_MODEL, "reasoning"));
+            data.put(modelEntry(EXPERT_MODEL, "expert"));
+            root.put("object", "list");
+            root.put("data", data);
+        } catch (Throwable ignored) {}
         return root;
     }
 

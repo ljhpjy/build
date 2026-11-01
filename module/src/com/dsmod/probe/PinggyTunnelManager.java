@@ -52,6 +52,25 @@ final class PinggyTunnelManager {
     static volatile boolean k;                // requested
     static volatile int l;                    // remote pid / connection id
     static volatile String m = STATE_STOPPED; // state
+
+    /** Longer aliases used by newer call sites; both spellings refer to the same state. */
+    static final Object LOCK = c;
+
+    static boolean isRequested() {
+        return k;
+    }
+
+    static void setRequested(boolean value) {
+        k = value;
+    }
+
+    static int getPid() {
+        return l;
+    }
+
+    static String getState() {
+        return m == null ? STATE_STOPPED : m;
+    }
     static volatile String error = "";
     static volatile String url = "";
     static volatile int localPort;
@@ -85,6 +104,7 @@ final class PinggyTunnelManager {
         if (clearRequested) {
             k = false;
             l = 0;
+            m = STATE_STOPPED;
             Context ctx = appContext;
             if (ctx != null) {
                 ctx.getSharedPreferences(PREFS, 0).edit()

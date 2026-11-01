@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.util.Base64;
 import android.util.Log;
 
@@ -172,9 +173,9 @@ final class PublicTunnelManager {
         }
         KeyGenerator kg = KeyGenerator.getInstance("AES", "AndroidKeyStore");
         KeyGenParameterSpec spec = new KeyGenParameterSpec.Builder(alias,
-                KeyGenParameterSpec.PURPOSE_ENCRYPT | KeyGenParameterSpec.PURPOSE_DECRYPT)
-                .setBlockModes("GCM")
-                .setEncryptionPaddings("NoPadding")
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setRandomizedEncryptionRequired(true)
                 .build();
         kg.init(spec);

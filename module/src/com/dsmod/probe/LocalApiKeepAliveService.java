@@ -106,22 +106,24 @@ public final class LocalApiKeepAliveService extends Service {
         handler.removeCallbacks(keepAliveTick);
         synchronized (PublicTunnelManager.LOCK) {
             PublicTunnelManager.requested = false;
-            PublicTunnelManager.pid = 0;
+            PublicTunnelManager.process = null;
             PublicTunnelManager.log("foreground service stopped");
-            boolean tunnelRequested = getSharedPreferences("deekseep_public_tunnel", 0)
-                    .getBoolean(KEY_REQUESTED, false);
-            PublicTunnelManager.state = tunnelRequested ? "waiting_local_api" : "stopped";
+            boolean tunnelRequested = getSharedPreferences(PublicTunnelManager.PREFS, 0)
+                    .getBoolean(PublicTunnelManager.KEY_REQUESTED, false);
+            PublicTunnelManager.state = tunnelRequested
+                    ? PublicTunnelManager.STATE_WAITING
+                    : PublicTunnelManager.STATE_STOPPED;
         }
-        synchronized (PinggyTunnelManager.LOCK) {
+        synchronized (PinggyTunnelManager.c) {
             Context app = getApplicationContext();
-            PinggyTunnelManager.requested = false;
-            PinggyTunnelManager.pid = 0;
+            PinggyTunnelManager.k = false;
+            PinggyTunnelManager.l = 0;
             if (app != null) {
-                app.getSharedPreferences("deekseep_pinggy_tunnel", 0).edit()
-                        .putBoolean(KEY_REQUESTED, false).apply();
+                app.getSharedPreferences(PinggyTunnelManager.PREFS, 0).edit()
+                        .putBoolean(PinggyTunnelManager.KEY_REQUESTED, false).apply();
             }
-            PinggyTunnelManager.stop("foreground service stopped", true);
-            PinggyTunnelManager.state = "stopped";
+            PinggyTunnelManager.p("foreground service stopped", true);
+            PinggyTunnelManager.m = PinggyTunnelManager.STATE_STOPPED;
         }
         try {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
@@ -173,13 +175,15 @@ public final class LocalApiKeepAliveService extends Service {
             }
         } catch (Throwable ignored) {}
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                ? NotificationIcons.newBuilder(this) : new Notification.Builder(this);
+                ? new Notification.Builder(this, CHANNEL_ID)
+                : new Notification.Builder(this);
         builder.setSmallIcon(NotificationIcons.smallIcon(this));
         builder.setContentTitle(UiLanguage.text(this,
                 "DeepSeek 本地 API 正在运行", "DeepSeek Local API is running"));
-        boolean publicTunnel = "connected".equals(PublicTunnelManager.state)
+        boolean publicTunnel = PublicTunnelManager.STATE_CONNECTED
+                .equals(PublicTunnelManager.state)
                 && PublicTunnelManager.process != null;
-        boolean pinggyTunnel = PinggyTunnelManager.isRunning();
+        boolean pinggyTunnel = PinggyTunnelManager.f();
         String text = (publicTunnel || pinggyTunnel)
                 ? UiLanguage.text(this, "本地、局域网与公网入口均在运行",
                         "Local, LAN, and public endpoints are active")
