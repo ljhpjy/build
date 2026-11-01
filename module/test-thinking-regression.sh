@@ -182,4 +182,4 @@ java -cp "$TEST_CP" \
 java -cp "$TEST_CP" \
     com.dsmod.probe.AutoContinuePolicyRegressionTest
 
-./test-language-catalog.sh
+bash ./test-language-catalog.sh

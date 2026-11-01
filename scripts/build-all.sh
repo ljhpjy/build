@@ -30,7 +30,7 @@ echo "=== Running traditional-Xposed adapter regression test ==="
 echo
 echo "=== Verifying shared-core parity, entry formats, and APK signatures ==="
 for class_name in AccountManager ChatAppearance ChatAppearanceUi DeekseepUi \
-        AgentDeviceBridge HeartbeatToolProtocol ResponsePreserver; do
+        HeartbeatToolProtocol ResponsePreserver ToolResult; do
     test -f "$ROOT/module-universal/build/classes/com/dsmod/probe/${class_name}.class"
 done
 if grep -q '^import io\.github\.libxposed' \
