@@ -191,6 +191,55 @@ final class UiLanguageCatalog {
                 "Manage local tools, permission mode, and Root / Shizuku backends.");
         add("配置兼容接口、后台保活、密钥、监听地址和请求统计。",
                 "Configure compatible endpoints, background keepalive, keys, listeners, and request statistics.");
+        // 1.7.5 local API, public tunnel and foreground-keepalive copy drawn by SettingsActivity.
+        add("本地 API", "Local API");
+        add("启动本地 API", "Start local API");
+        add("在设备上开启 OpenAI / Anthropic 兼容网关",
+                "Serve an OpenAI / Anthropic compatible gateway on this device");
+        add("停止本地 API", "Stop local API");
+        add("关闭网关并结束后台保活",
+                "Shut down the gateway and its foreground keepalive");
+        add("本地 API 状态", "Local API status");
+        add("查看端口、协议、密钥指纹与统计",
+                "Inspect port, protocol, key fingerprint and counters");
+        add("轮换 API Key", "Rotate API key");
+        add("生成新的 sk-deekseep- 密钥", "Generate a new sk-deekseep- key");
+        add("切换 API 协议", "Switch API protocol");
+        add("在 OpenAI 与 Anthropic 格式之间切换",
+                "Switch between OpenAI and Anthropic formats");
+        add("前台保活", "Foreground keepalive");
+        add("启用前台保活", "Enable foreground keepalive");
+        add("保持本地 API 与 SSE 流在后台可用",
+                "Keep the local API and SSE streams alive in the background");
+        add("停用前台保活", "Disable foreground keepalive");
+        add("结束后台监听与 CPU 唤醒锁",
+                "Stop background listening and release the CPU wake lock");
+        add("本地 API 已启动：", "Local API started: ");
+        add("本地 API 已停止", "Local API stopped");
+        add("本地 API 未在运行", "Local API was not running");
+        add("新的 API Key", "New API key");
+        add("API 协议", "API protocol");
+        add("协议已切换：", "Protocol switched: ");
+        add("前台保活已启用", "Foreground keepalive enabled");
+        add("前台保活已停用", "Foreground keepalive disabled");
+        add("前台保活操作失败", "Foreground keepalive request failed");
+        add("运行", "Running");
+        add("端口", "Port");
+        add("协议", "Protocol");
+        add("入口", "Endpoint");
+        add("密钥指纹", "Key fingerprint");
+        add("请求", "Requests");
+        add("后端", "Backend");
+        add("输入 tokens", "Input tokens");
+        add("输出 tokens", "Output tokens");
+        add("最后错误", "Last error");
+        add("状态", "State");
+        add("已配置 token", "Token configured");
+        add("域名", "Domains");
+        add("直连地址", "Direct root");
+        add("传输", "Transport");
+        add("二进制", "Binary");
+        add("错误", "Errors");
         add("禁用热更新 · 实验性", "Disable hot updates · Experimental");
         add("阻止 DeepSeek 展示普通或强制更新弹窗；不影响商店手动更新。",
                 "Prevent DeepSeek from showing normal or forced update dialogs; manual store updates are unaffected.");

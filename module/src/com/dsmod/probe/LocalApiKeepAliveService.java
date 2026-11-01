@@ -104,27 +104,6 @@ public final class LocalApiKeepAliveService extends Service {
         gatewayRunning = false;
         startedAtMs = 0L;
         handler.removeCallbacks(keepAliveTick);
-        synchronized (PublicTunnelManager.LOCK) {
-            PublicTunnelManager.requested = false;
-            PublicTunnelManager.process = null;
-            PublicTunnelManager.log("foreground service stopped");
-            boolean tunnelRequested = getSharedPreferences(PublicTunnelManager.PREFS, 0)
-                    .getBoolean(PublicTunnelManager.KEY_REQUESTED, false);
-            PublicTunnelManager.state = tunnelRequested
-                    ? PublicTunnelManager.STATE_WAITING
-                    : PublicTunnelManager.STATE_STOPPED;
-        }
-        synchronized (PinggyTunnelManager.c) {
-            Context app = getApplicationContext();
-            PinggyTunnelManager.k = false;
-            PinggyTunnelManager.l = 0;
-            if (app != null) {
-                app.getSharedPreferences(PinggyTunnelManager.PREFS, 0).edit()
-                        .putBoolean(PinggyTunnelManager.KEY_REQUESTED, false).apply();
-            }
-            PinggyTunnelManager.p("foreground service stopped", true);
-            PinggyTunnelManager.m = PinggyTunnelManager.STATE_STOPPED;
-        }
         try {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable ignored) {}
@@ -180,15 +159,8 @@ public final class LocalApiKeepAliveService extends Service {
         builder.setSmallIcon(NotificationIcons.smallIcon(this));
         builder.setContentTitle(UiLanguage.text(this,
                 "DeepSeek 本地 API 正在运行", "DeepSeek Local API is running"));
-        boolean publicTunnel = PublicTunnelManager.STATE_CONNECTED
-                .equals(PublicTunnelManager.state)
-                && PublicTunnelManager.process != null;
-        boolean pinggyTunnel = PinggyTunnelManager.f();
-        String text = (publicTunnel || pinggyTunnel)
-                ? UiLanguage.text(this, "本地、局域网与公网入口均在运行",
-                        "Local, LAN, and public endpoints are active")
-                : UiLanguage.text(this, "正在保持后台监听与流式响应稳定",
-                        "Keeping background listening and streaming responses stable");
+        String text = UiLanguage.text(this, "正在保持后台监听与流式响应稳定",
+                "Keeping background listening and streaming responses stable");
         builder.setContentText(text);
         builder.setCategory("service");
         builder.setOngoing(true);

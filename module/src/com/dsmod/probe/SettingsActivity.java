@@ -279,33 +279,6 @@ public class SettingsActivity extends Activity {
                 }));
         content.addView(apiCard, cardLp());
 
-        content.addView(sectionTitle(UiLanguage.text(this, "公网隧道", "Public tunnel")));
-        LinearLayout tunnelCard = card();
-        tunnelCard.addView(actionRow(ModuleGlyphView.SETTINGS,
-                UiLanguage.text(this, "Cloudflare Tunnel 配置", "Cloudflare Tunnel settings"),
-                UiLanguage.text(this, "设置 token、域名、直连地址与传输方式",
-                        "Configure token, domains, direct root and transport"),
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) { showCloudflareConfig(); }
-                }));
-        tunnelCard.addView(divider());
-        tunnelCard.addView(actionRow(ModuleGlyphView.SETTINGS,
-                UiLanguage.text(this, "Cloudflare Tunnel 启停", "Toggle Cloudflare Tunnel"),
-                UiLanguage.text(this, "按已保存的配置启动或停止 cloudflared",
-                        "Start or stop cloudflared using the saved configuration"),
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) { toggleCloudflareTunnel(); }
-                }));
-        tunnelCard.addView(divider());
-        tunnelCard.addView(actionRow(ModuleGlyphView.SETTINGS,
-                UiLanguage.text(this, "Pinggy 隧道启停", "Toggle Pinggy tunnel"),
-                UiLanguage.text(this, "通过 SSH 反向隧道暴露本地 API",
-                        "Expose the local API through an SSH reverse tunnel"),
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) { togglePinggyTunnel(); }
-                }));
-        content.addView(tunnelCard, cardLp());
-
         content.addView(sectionTitle(UiLanguage.text(this, "前台保活", "Foreground keepalive")));
         LinearLayout keepAliveCard = card();
         keepAliveCard.addView(actionRow(ModuleGlyphView.SETTINGS,
@@ -347,8 +320,6 @@ public class SettingsActivity extends Activity {
     private void stopLocalApi() {
         try {
             LocalApiKeepAliveService.setRequested(this, false);
-            PinggyTunnelManager.p("settings stop", true);
-            PublicTunnelManager.setRequested(this, false);
             Bundle result = LocalApiGateway.stop(this);
             toast(result != null && result.getBoolean("accepted", false)
                     ? UiLanguage.text(this, "本地 API 已停止", "Local API stopped")
@@ -387,12 +358,6 @@ public class SettingsActivity extends Activity {
                 body.append(UiLanguage.text(this, "最后错误", "Last error")).append(": ")
                         .append(err).append('\n');
             }
-            Bundle cf = PublicTunnelManager.status(this);
-            body.append('\n').append(UiLanguage.text(this, "Cloudflare", "Cloudflare")).append(": ")
-                    .append(cf.getString("state", "")).append('\n');
-            Bundle py = PinggyTunnelManager.status(this);
-            body.append(UiLanguage.text(this, "Pinggy", "Pinggy")).append(": ")
-                    .append(py.getString("state", ""));
         } catch (Throwable error) {
             body.append(error.getClass().getSimpleName()).append(": ").append(error.getMessage());
         }
@@ -435,75 +400,6 @@ public class SettingsActivity extends Activity {
                 })
                 .setNegativeButton(UiLanguage.text(this, "取消", "Cancel"), null)
                 .show();
-    }
-
-    private void showCloudflareConfig() {
-        try {
-            Bundle status = PublicTunnelManager.status(this);
-            StringBuilder body = new StringBuilder();
-            body.append(UiLanguage.text(this, "状态", "State")).append(": ")
-                    .append(status.getString("state", "")).append('\n');
-            body.append(UiLanguage.text(this, "已配置 token", "Token configured")).append(": ")
-                    .append(status.getBoolean("token_configured", false)).append('\n');
-            body.append(UiLanguage.text(this, "域名", "Domains")).append(": ")
-                    .append(status.getString("domains", "")).append('\n');
-            body.append(UiLanguage.text(this, "直连地址", "Direct root")).append(": ")
-                    .append(status.getString("direct_root", "")).append('\n');
-            body.append(UiLanguage.text(this, "传输", "Transport")).append(": ")
-                    .append(status.getString("transport", "auto")).append('\n');
-            body.append(UiLanguage.text(this, "二进制", "Binary")).append(": ")
-                    .append(status.getBoolean("binary_available", false)).append('\n');
-            String err = status.getString("error", "");
-            if (err != null && err.length() > 0) {
-                body.append(UiLanguage.text(this, "错误", "Error")).append(": ")
-                        .append(err).append('\n');
-            }
-            String log = status.getString("recent_log", "");
-            if (log != null && log.length() > 0) {
-                body.append('\n').append(log);
-            }
-            new AlertDialog.Builder(this)
-                    .setTitle(UiLanguage.text(this, "Cloudflare Tunnel", "Cloudflare Tunnel"))
-                    .setMessage(body.toString())
-                    .setPositiveButton(UiLanguage.text(this, "完成", "Done"), null)
-                    .show();
-        } catch (Throwable error) {
-            toast(error.getClass().getSimpleName() + ": " + error.getMessage());
-        }
-    }
-
-    private void toggleCloudflareTunnel() {
-        try {
-            Bundle status = PublicTunnelManager.status(this);
-            boolean requested = status.getBoolean("requested", false);
-            Bundle result = PublicTunnelManager.setRequested(this, !requested);
-            if (result != null && result.getBoolean("accepted", false)) {
-                toast(requested
-                        ? UiLanguage.text(this, "Cloudflare Tunnel 已停止", "Cloudflare Tunnel stopped")
-                        : UiLanguage.text(this, "Cloudflare Tunnel 已启动", "Cloudflare Tunnel started"));
-            } else {
-                toast(result == null ? "" : result.getString("error", ""));
-            }
-        } catch (Throwable error) {
-            toast(error.getClass().getSimpleName() + ": " + error.getMessage());
-        }
-    }
-
-    private void togglePinggyTunnel() {
-        try {
-            Bundle status = PinggyTunnelManager.status(this);
-            boolean requested = status.getBoolean("requested", false);
-            Bundle result = PinggyTunnelManager.setRequested(this, !requested);
-            if (result != null && result.getBoolean("accepted", false)) {
-                toast(requested
-                        ? UiLanguage.text(this, "Pinggy 隧道已停止", "Pinggy tunnel stopped")
-                        : UiLanguage.text(this, "Pinggy 隧道已启动", "Pinggy tunnel started"));
-            } else {
-                toast(result == null ? "" : result.getString("error", ""));
-            }
-        } catch (Throwable error) {
-            toast(error.getClass().getSimpleName() + ": " + error.getMessage());
-        }
     }
 
     private void toggleKeepAlive(boolean enable) {

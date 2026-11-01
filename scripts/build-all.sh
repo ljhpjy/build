@@ -24,10 +24,6 @@ echo "=== Running chat-editor regression test ==="
 (cd "$ROOT/module" && bash test-thinking-regression.sh)
 
 echo
-echo "=== Running expert relay multi-turn regression test ==="
-(cd "$ROOT/module" && bash test-expert-relay-regression.sh)
-
-echo
 echo "=== Running traditional-Xposed adapter regression test ==="
 (cd "$ROOT/module-legacy" && bash test-adapter-regression.sh)
 

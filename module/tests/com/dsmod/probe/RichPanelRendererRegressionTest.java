@@ -275,13 +275,6 @@ public final class RichPanelRendererRegressionTest {
                         && rejectedVisual.visibleText.length() > 0,
                 "invalid rich visual was silently swallowed or promoted to executable content");
 
-        AgentToolConfig.Snapshot migrated = AgentToolConfig.decode(
-                "{\"version\":2,\"enabled\":true,\"backend\":\"in_app\","
-                        + "\"permission\":\"all\",\"enabled_tools\":[\"ask_user\"]}");
-        require(migrated.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_RENDER_RICH_PANEL),
-                "existing Agent settings did not automatically enable the new panel tool");
-
         System.out.println("Rich panel renderer regression tests passed");
     }
 }

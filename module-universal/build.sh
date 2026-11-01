@@ -81,7 +81,7 @@ $AAPT2 compile --dir res -o "$OUT/res.zip"
 $AAPT2 link -o "$OUT/base.apk" -I "$ANDROID_JAR" \
   --manifest AndroidManifest.xml -R "$OUT/res.zip" --auto-add-overlay
 
-echo "[5/7] package Xposed metadata and Agent runtime"
+echo "[5/7] package Xposed metadata and runtime payload"
 cp "$OUT/base.apk" "$OUT/unsigned.apk"
 ( cd "$OUT/dex" && zip -q ../unsigned.apk classes.dex )
 mkdir -p "$OUT/xstage/assets" "$OUT/xstage/META-INF/com.dsmod.probe.agent"

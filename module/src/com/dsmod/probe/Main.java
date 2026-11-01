@@ -819,10 +819,6 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                     if (!LocalApiKeepAliveService.isRequested(appContext)) return;
                     LocalApiGateway.start(appContext);
                     int apiPort = LocalApiGateway.port;
-                    PublicTunnelManager.setGatewayState(true, apiPort);
-                    PinggyTunnelManager.setLocalPort(apiPort);
-                    PublicTunnelManager.reconcile(appContext);
-                    PinggyTunnelManager.reconcile(appContext);
                     LocalApiKeepAliveService.setRequested(appContext, true);
                     log("local API auto-resumed port=" + apiPort);
                 } catch (Throwable error) {
@@ -4504,7 +4500,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                             HeartbeatToolProtocol.systemPrompt(
                                     now, heartbeatPlanForConversation(conversationId),
                                     proactiveHeartbeatIntervalMinutes(), conversationId,
-                                    AgentToolConfig.effectiveTools(
+                                    HeartbeatToolProtocol.heartbeatTools(
                                             isProactiveHeartbeatEnabled())),
                             event);
                     if (conversationId.length() > 0
@@ -5176,7 +5172,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
     private static int executeHeartbeatToolCalls(
             Context context, List<HeartbeatToolProtocol.ToolCall> calls,
             boolean announce) {
-        if (!AgentToolConfig.load().enabled || calls == null || calls.isEmpty()) return 0;
+        if (calls == null || calls.isEmpty()) return 0;
         Context effective = context != null ? context : currentHostContext();
         if (effective == null) return 0;
         AgentStepResult step = null;
@@ -5210,7 +5206,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                     continue;
                 }
                 step = new AgentStepResult(effective, scope, call);
-                if (!AgentToolConfig.allows(call.tool)) {
+                if (!HeartbeatToolProtocol.allows(call.tool)) {
                     log("local tool blocked by Agent settings tool=" + call.tool);
                     HookLogOverlay.event("ERROR", "Tool blocked",
                             "name=" + call.tool
@@ -5221,7 +5217,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                                     "This tool is disabled in Agent settings"));
                     continue;
                 }
-                if (AgentToolConfig.isHeartbeatTool(call.tool)
+                if (HeartbeatToolProtocol.isHeartbeatTool(call.tool)
                         && !isProactiveHeartbeatEnabled()) {
                     log("heartbeat tool blocked because proactive messages are disabled tool="
                             + call.tool);
@@ -5332,29 +5328,15 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                     resultOutput = success
                             ? "rendered=true; title=" + call.instruction
                             : "rendered=false";
-                } else if (HeartbeatToolProtocol.TOOL_ASK_USER.equals(call.tool)) {
-                    success = queueAgentQuestion(effective, step, call, announce);
-                    resultWillArriveSeparately = success;
-                } else if (HeartbeatToolProtocol.TOOL_DELAY.equals(call.tool)) {
-                    success = queueAgentDelay(effective, step, call, announce);
-                    resultWillArriveSeparately = success;
-                } else if (HeartbeatToolProtocol.TOOL_MUSIC.equals(call.tool)) {
-                    success = queueAgentMusic(effective, step, call, announce);
-                    resultWillArriveSeparately = success;
-                } else if (HeartbeatToolProtocol.TOOL_CAPTURE_SCREEN.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_TAP_SCREEN.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_SWIPE_SCREEN.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_PRESS_BACK.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_OPEN_APP.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_SCREEN_POWER.equals(call.tool)) {
-                    success = queueAgentUiTool(effective, step, call, announce);
-                    resultWillArriveSeparately = success;
-                } else if (HeartbeatToolProtocol.TOOL_READ_FILE.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_WRITE_FILE.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_SHELL.equals(call.tool)
-                        || HeartbeatToolProtocol.TOOL_NETWORK_REQUEST.equals(call.tool)) {
-                    success = queueAgentDataTool(effective, step, call, announce);
-                    resultWillArriveSeparately = success;
+                } else {
+                    // The Agent feature was removed: the device, music, delay and ask-user tools
+                    // are no longer offered to the model, so anything else is rejected here.
+                    success = false;
+                    if (announce) {
+                        showHeartbeatToolToast(effective, UiLanguage.text(effective,
+                                "该本地工具已在当前版本中移除",
+                                "This local tool is not available in this build"));
+                    }
                 }
                 if (success) {
                     completed++;
@@ -5487,91 +5469,11 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         return true;
     }
 
-    private static boolean queueAgentQuestion(
-            final Context context, final AgentStepResult step,
-            final HeartbeatToolProtocol.ToolCall call,
-            final boolean announce) {
-        final Activity activity = currentHostActivity();
-        if (activity == null || activity.isFinishing()
-                || (Build.VERSION.SDK_INT >= 17 && activity.isDestroyed())) {
-            if (announce) showHeartbeatToolToast(context,
-                    UiLanguage.text(context,
-                            "当前没有可显示问题的 DeepSeek 界面",
-                            "There is no active DeepSeek screen for the question"));
-            return false;
-        }
-        boolean queued = AgentQuestionUi.enqueue(
-                activity, call, new AgentQuestionUi.AnswerListener() {
-                    @Override public void onAnswer(
-                            String scope, String visibleAnswer) {
-                        queueVisibleAgentAnswer(
-                                context, scope, visibleAnswer,
-                                new Runnable() {
-                                    @Override public void run() {
-                                        if (step != null) step.release(call.id);
-                                    }
-                                },
-                                new Runnable() {
-                                    @Override public void run() {
-                                        queueSimpleAgentToolResult(
-                                                context, step, call, false, "",
-                                                UiLanguage.text(context,
-                                                        "用户答案未能发送",
-                                                        "The user's answer could not be sent"));
-                                    }
-                                });
-                    }
-
-                    @Override public void onCancel(String scope) {
-                        queueSimpleAgentToolResult(
-                                context, step, call, false, "",
-                                UiLanguage.text(context,
-                                        "用户关闭了问题，未提供答案",
-                                        "The user dismissed the question without answering"));
-                    }
-                });
-        if (queued) AgentRunStore.waitingUser(call);
-        return queued;
-    }
-
-    private static boolean queueAgentDataTool(
-            final Context context, final AgentStepResult step,
-            final HeartbeatToolProtocol.ToolCall call,
-            final boolean announce) {
-        AgentDeviceBridge.executeDataTool(
-                context, call, new AgentDeviceBridge.ResultCallback() {
-                    @Override public void onResult(
-                            AgentDeviceBridge.ToolResult result) {
-                        log("Agent data tool result tool=" + call.tool
-                                + " id=" + call.id
-                                + " ok=" + result.success
-                                + " exit=" + result.exitCode
-                                + " chars=" + result.output.length()
-                                + " truncated=" + result.truncated
-                                + " detail=" + truncateForLog(
-                                result.detail, 320));
-                        if (!result.success && announce) {
-                            showHeartbeatToolToast(context, result.detail);
-                        }
-                        if (HeartbeatToolProtocol.TOOL_READ_FILE.equals(call.tool)
-                                && result.success
-                                && result.output.length() > AGENT_TXT_ATTACH_THRESHOLD) {
-                            queueAgentTextFileUpload(context, step, call, result);
-                        } else if (step != null) {
-                            step.addResult(call, result);
-                        } else {
-                            queueHiddenAgentToolResult(context, call, result);
-                        }
-                    }
-                });
-        return true;
-    }
-
     private static void queueSimpleAgentToolResult(
             Context context, AgentStepResult step,
             HeartbeatToolProtocol.ToolCall call,
             boolean success, String output, String detail) {
-        AgentDeviceBridge.ToolResult result = new AgentDeviceBridge.ToolResult(
+        ToolResult result = new ToolResult(
                 success, success ? 0 : 1, output, detail,
                 "utf-8", false);
         if (step != null) {
@@ -5612,7 +5514,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                     AgentRunStore.queueResult(call, false, event, detail);
                 }
             }
-            if (!AgentToolConfig.enabledFast()) return;
+            if (!HeartbeatToolProtocol.enabledFast()) return;
             for (AgentRunStore.Record record : AgentRunStore.pending()) {
                 queueHiddenAgentEvent(
                         context, record.scope, record.event, record.outboxId);
@@ -5624,7 +5526,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     /** Called when a native chat ViewModel becomes available, including after switching chats. */
     private static void recoverAgentRunsForScope(Context context, String scope) {
-        if (!AgentToolConfig.enabledFast()) return;
+        if (!HeartbeatToolProtocol.enabledFast()) return;
         String safeScope = HeartbeatToolProtocol.cleanScope(scope);
         if (safeScope.length() == 0) return;
         for (AgentRunStore.Record record : AgentRunStore.pending()) {
@@ -5651,7 +5553,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
     }
 
     static boolean retryAgentOutbox(Context context, String outboxId) {
-        if (!AgentToolConfig.enabledFast()) return false;
+        if (!HeartbeatToolProtocol.enabledFast()) return false;
         AgentRunStore.Record record = AgentRunStore.findOutbox(outboxId);
         if (record == null || !record.hasPendingResult()) return false;
         queueHiddenAgentEvent(context, record.scope, record.event, record.outboxId);
@@ -5673,7 +5575,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     private static void queueHiddenAgentToolResult(
             Context context, HeartbeatToolProtocol.ToolCall call,
-            AgentDeviceBridge.ToolResult result) {
+            ToolResult result) {
         if (call == null || result == null) return;
         String scope = HeartbeatToolProtocol.cleanScope(call.scope);
         if (scope.length() == 0) return;
@@ -5743,7 +5645,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         }
 
         synchronized void addResult(HeartbeatToolProtocol.ToolCall call,
-                                    AgentDeviceBridge.ToolResult result) {
+                                    ToolResult result) {
             if (finished || call == null || call.id == null || result == null) return;
             if (this.call == null || !call.id.equals(this.call.id)) return;
             finished = true;
@@ -5774,7 +5676,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         /** A missing callback must become a real failure result instead of stalling the model. */
         synchronized void flushIfPending() {
             if (finished) return;
-            AgentDeviceBridge.ToolResult timeout = new AgentDeviceBridge.ToolResult(
+            ToolResult timeout = new ToolResult(
                     false, -2, "",
                     UiLanguage.text(context,
                             "工具等待结果超时",
@@ -6076,154 +5978,6 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
             log("Agent visible answer abandoned sid=" + scope
                     + " attempts=" + (attempt + 1));
             runAgentDeliveryCallback(onFailed);
-        }
-    }
-
-    private static boolean queueAgentUiTool(
-            final Context context, final AgentStepResult step,
-            final HeartbeatToolProtocol.ToolCall call,
-            final boolean announce) {
-        AgentToolConfig.Snapshot config = AgentToolConfig.load();
-        if (!AgentToolConfig.BACKEND_IN_APP.equals(config.backend)
-                && AgentToolConfig.PERMISSION_ALL.equals(config.permission)) {
-            AgentDeviceBridge.execute(
-                    context, call, new AgentDeviceBridge.StatusCallback() {
-                        @Override public void onStatus(
-                                AgentDeviceBridge.Status status) {
-                            log("privileged Agent tool result tool=" + call.tool
-                                    + " ok=" + status.connected
-                                    + " detail=" + status.detail);
-                            if (status.connected
-                                    && HeartbeatToolProtocol.TOOL_CAPTURE_SCREEN
-                                    .equals(call.tool)) {
-                                queueAgentScreenshotUpload(
-                                        context, step, call,
-                                        new File(AGENT_SCREENSHOT_DIR,
-                                                "latest_screen.png"), null);
-                            } else {
-                                queueSimpleAgentToolResult(
-                                        context, step, call, status.connected, "",
-                                        status.detail);
-                            }
-                            if (!status.connected && announce) {
-                                showHeartbeatToolToast(context, status.detail);
-                            }
-                        }
-                    });
-            return true;
-        }
-        final Activity activity = currentHostActivity();
-        final Handler handler = currentMainHandler();
-        if (activity == null || handler == null || activity.isFinishing()
-                || (Build.VERSION.SDK_INT >= 17 && activity.isDestroyed())) {
-            if (announce) showHeartbeatToolToast(context,
-                    UiLanguage.text(context,
-                            "当前没有可操作的 DeepSeek 界面",
-                            "There is no active DeepSeek screen to operate"));
-            return false;
-        }
-        int actionSpan = 240;
-        if (HeartbeatToolProtocol.TOOL_SWIPE_SCREEN.equals(call.tool)) {
-            actionSpan = call.durationMs + 180;
-        } else if (HeartbeatToolProtocol.TOOL_CAPTURE_SCREEN.equals(call.tool)) {
-            actionSpan = 520;
-        }
-        final long delay;
-        synchronized (AGENT_UI_ACTION_LOCK) {
-            long now = SystemClock.uptimeMillis();
-            long scheduledAt = Math.max(now + 180L, agentUiActionNotBefore);
-            agentUiActionNotBefore = scheduledAt + actionSpan;
-            delay = Math.max(0L, scheduledAt - now);
-        }
-        final WeakReference<Activity> reference = new WeakReference<>(activity);
-        return handler.postDelayed(new Runnable() {
-            @Override public void run() {
-                Activity live = reference.get();
-                boolean success = false;
-                try {
-                    success = live != null && !live.isFinishing()
-                            && (Build.VERSION.SDK_INT < 17 || !live.isDestroyed())
-                            && performAgentUiTool(live, context, step, call);
-                } catch (Throwable error) {
-                    log("agent UI tool failed tool=" + call.tool
-                            + " id=" + call.id + ": " + error);
-                }
-                if (!success && announce) {
-                    showHeartbeatToolToast(context, UiLanguage.text(context,
-                            "界面工具执行失败：" + call.tool,
-                            "UI tool failed: " + call.tool));
-                }
-                if (!HeartbeatToolProtocol.TOOL_CAPTURE_SCREEN.equals(call.tool)
-                        || !success) {
-                    queueSimpleAgentToolResult(
-                            context, step, call, success, "",
-                            success
-                                    ? UiLanguage.text(context,
-                                    "界面工具执行完成", "UI tool completed")
-                                    : UiLanguage.text(context,
-                                    "界面工具执行失败", "UI tool failed"));
-                }
-            }
-        }, delay);
-    }
-
-    private static boolean queueAgentMusic(
-            final Context context, final AgentStepResult step,
-            final HeartbeatToolProtocol.ToolCall call,
-            final boolean announce) {
-        AgentDeviceBridge.executeMusic(context, call,
-                new AgentDeviceBridge.StatusCallback() {
-                    @Override public void onStatus(AgentDeviceBridge.Status status) {
-                        log("music Agent tool result action=" + call.mode
-                                + " ok=" + status.connected
-                                + " detail=" + status.detail);
-                        queueSimpleAgentToolResult(context, step, call,
-                                status.connected, "", status.detail);
-                        if (!status.connected && announce) {
-                            showHeartbeatToolToast(context, status.detail);
-                        }
-                    }
-                });
-        return true;
-    }
-
-    private static boolean queueAgentDelay(
-            Context context, AgentStepResult step,
-            HeartbeatToolProtocol.ToolCall call, boolean announce) {
-        if (context == null || step == null || call == null
-                || call.durationMs < 1) return false;
-        Uri uri = new Uri.Builder()
-                .scheme(AgentDelayActivity.SCHEME)
-                .authority(AgentDelayActivity.HOST)
-                .appendQueryParameter("token", AgentDelayActivity.TOKEN)
-                .appendQueryParameter("id", call.id)
-                .appendQueryParameter("scope", call.scope)
-                .appendQueryParameter("duration_ms",
-                        String.valueOf(call.durationMs))
-                .build();
-        Intent schedule = new Intent(Intent.ACTION_VIEW, uri)
-                .addCategory(Intent.CATEGORY_BROWSABLE)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_NO_ANIMATION
-                        | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        String key = agentDelayKey(call.scope, call.id);
-        AGENT_DELAY_STEPS.put(key, step);
-        try {
-            context.startActivity(schedule);
-            if (announce) showHeartbeatToolToast(context,
-                    UiLanguage.text(context,
-                            "已开始等待 " + call.durationMs + " 毫秒",
-                            "Waiting for " + call.durationMs + " milliseconds"));
-            log("Agent durable delay scheduled id=" + call.id
-                    + " ms=" + call.durationMs + " scope=" + call.scope);
-            return true;
-        } catch (Throwable error) {
-            AGENT_DELAY_STEPS.remove(key, step);
-            log("Agent durable delay schedule failed: "
-                    + safeThrowableMessage(error));
-            return false;
         }
     }
 
@@ -6727,7 +6481,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
     private static void queueAgentTextFileUpload(
             Context context, AgentStepResult step,
             HeartbeatToolProtocol.ToolCall call,
-            AgentDeviceBridge.ToolResult result) {
+            ToolResult result) {
         String safeScope = call == null ? ""
                 : HeartbeatToolProtocol.cleanScope(call.scope);
         if (safeScope.length() == 0 || result == null) return;
@@ -6762,7 +6516,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     private static File writeAgentTextAttachment(
             Context context, HeartbeatToolProtocol.ToolCall call,
-            AgentDeviceBridge.ToolResult result) {
+            ToolResult result) {
         try {
             if (context == null) return null;
             File dir = new File(context.getCacheDir(), "ds_agent_txt");
@@ -6808,7 +6562,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         final Object token;
         final AgentStepResult step;
         final HeartbeatToolProtocol.ToolCall call;
-        final AgentDeviceBridge.ToolResult result;
+        final ToolResult result;
         int attempts;
         Object composer;
         Object attachment;
@@ -6819,7 +6573,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                 Context context, String scope, File textFile,
                 Object token, AgentStepResult step,
                 HeartbeatToolProtocol.ToolCall call,
-                AgentDeviceBridge.ToolResult result) {
+                ToolResult result) {
             this.context = context;
             this.scope = scope;
             this.textFile = textFile;
@@ -7606,7 +7360,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
                             long injectStarted = SystemClock.uptimeMillis();
                             String sysPrompt = readPrompt();
                             java.util.Set<String> enabledLocalTools =
-                                    AgentToolConfig.effectiveTools(
+                                    HeartbeatToolProtocol.heartbeatTools(
                                             isProactiveHeartbeatEnabled());
                             String heartbeatTools = !isSynthetic
                                     && conversationId.length() > 0
@@ -7697,7 +7451,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         String key = HeartbeatToolProtocol.cleanScope(conversationId)
                 + "|" + (now / 60_000L) + "|" + interval + "|" + plan
                 + "|" + String.valueOf(enabledTools)
-                + "|" + AgentToolConfig.load().promptStrength;
+                + "|" + HeartbeatToolProtocol.promptStrength();
         String presentKey = cachedAgentContractKey;
         String present = cachedAgentContractText;
         if (key.equals(presentKey) && present.length() > 0) return present;
@@ -14170,16 +13924,9 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
 
     private static void probeConfiguredAgentBackendOnce(Context context) {
-        if (!AGENT_PRIVILEGED_BACKEND_PROBED.compareAndSet(false, true)) return;
-        String backend = AgentToolConfig.load().backend;
-        if (AgentToolConfig.BACKEND_IN_APP.equals(backend)) return;
-        AgentDeviceBridge.probe(context, backend,
-                new AgentDeviceBridge.StatusCallback() {
-                    @Override public void onStatus(AgentDeviceBridge.Status status) {
-                        log("Agent configured backend probe connected="
-                                + status.connected + " detail=" + status.detail);
-                    }
-                });
+        // The Agent feature was removed together with its Root / Shizuku backends, so there is no
+        // privileged transport left to probe. The call site is kept for the hook wiring.
+        AGENT_PRIVILEGED_BACKEND_PROBED.set(true);
     }
 
 
@@ -15533,13 +15280,13 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     private static void handleAgentDelayComplete(Context context, Intent intent) {
         String id = intent == null ? "" : intent.getStringExtra(
-                AgentDelayReceiver.EXTRA_ID);
+                "call_id");
         String scope = intent == null ? "" : intent.getStringExtra(
-                AgentDelayReceiver.EXTRA_SCOPE);
+                "scope");
         long requested = intent == null ? 0L : intent.getLongExtra(
-                AgentDelayReceiver.EXTRA_DURATION_MS, 0L);
+                "duration_ms", 0L);
         long started = intent == null ? 0L : intent.getLongExtra(
-                AgentDelayReceiver.EXTRA_STARTED_AT, 0L);
+                "started_at", 0L);
         String safeScope = HeartbeatToolProtocol.cleanScope(scope);
         if (id == null || id.length() == 0 || safeScope.length() == 0
                 || requested < 1L || requested > 604_800_000L) {
@@ -15569,7 +15316,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
         String detail = UiLanguage.text(context,
                 "延迟结束，可继续下一步",
                 "Delay completed; the next step may continue");
-        AgentDeviceBridge.ToolResult result = new AgentDeviceBridge.ToolResult(
+        ToolResult result = new ToolResult(
                 true, 0, output, detail, "utf-8", false);
         AgentStepResult step = AGENT_DELAY_STEPS.remove(
                 agentDelayKey(safeScope, id));
@@ -15795,7 +15542,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
 
     private static void registerHeartbeatResponseState(Object fragment) {
-        if (fragment == null || !AgentToolConfig.enabledFast()) return;
+        if (fragment == null || !HeartbeatToolProtocol.enabledFast()) return;
         Object type = readHostField(fragment, "a");
         if (type != null && !"RESPONSE".equals(String.valueOf(type))) return;
         Object state = liveResponseTextState(fragment);
@@ -15974,7 +15721,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     private static void dispatchStaticAgentToolFallback(
             HeartbeatToolProtocol.Result parsed) {
-        if (parsed == null || !AgentToolConfig.enabledFast()) return;
+        if (parsed == null || !HeartbeatToolProtocol.enabledFast()) return;
         ArrayList<HeartbeatToolProtocol.ToolCall> authorized = new ArrayList<>();
         for (HeartbeatToolProtocol.ToolCall call : parsed.calls) {
             if (isAuthorizedInteractiveAgentToolCall(call)) authorized.add(call);
@@ -16045,7 +15792,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
      * and only writes fragment state when an actual private transport marker is present.
      */
     private static void sanitizeAssistantToolTransportAtRenderBoundary(Object message) {
-        if (message == null || !AgentToolConfig.enabledFast()) return;
+        if (message == null || !HeartbeatToolProtocol.enabledFast()) return;
         try {
             List fragments = messageFragments(message);
             if (fragments == null || fragments.isEmpty()) return;
@@ -16061,7 +15808,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
     /** Stateful screen monitor: hide from a partial opening marker through its closing marker. */
     private static void sanitizeHeartbeatFragmentAtRenderBoundary(Object fragment) {
-        if (fragment == null || !AgentToolConfig.enabledFast()
+        if (fragment == null || !HeartbeatToolProtocol.enabledFast()
                 || !"RESPONSE".equals(String.valueOf(
                         readHostField(fragment, "a")))) return;
         Object state = liveResponseTextState(fragment);
@@ -16090,7 +15837,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
 
 
     private static void sanitizeHeartbeatMarkdownStateBeforeRead(Object observableState) {
-        if (observableState == null || !AgentToolConfig.enabledFast()) return;
+        if (observableState == null || !HeartbeatToolProtocol.enabledFast()) return;
         Object current = invokeNoArg(observableState, "getValue");
         if (!(current instanceof String)) return;
         String raw = (String) current;
@@ -16196,7 +15943,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
             // The request-side scope lease identifies a real visible-chat generation. Do not use
             // the local-API semaphore here: an unrelated request can own it for a moment and used
             // to make this valid call disappear permanently.
-            if (executeTools && AgentToolConfig.enabledFast()) {
+            if (executeTools && HeartbeatToolProtocol.enabledFast()) {
                 for (HeartbeatToolProtocol.ToolCall call : parsed.calls) {
                     if (!isAuthorizedInteractiveAgentToolCall(call)) {
                         if (!stream.unauthorizedCallLogged) {
@@ -16320,7 +16067,7 @@ public class Main extends LegacyXposedModule implements IXposedHookLoadPackage {
     private static HeartbeatFragmentsPatch sanitizeHeartbeatFragmentsPatch(
             Object message, Object jsonElement) {
         if (message == null || jsonElement == null
-                || !AgentToolConfig.enabledFast()) return null;
+                || !HeartbeatToolProtocol.enabledFast()) return null;
         try {
             String source = String.valueOf(jsonElement);
             if (source.indexOf("DEEKSEEP") < 0

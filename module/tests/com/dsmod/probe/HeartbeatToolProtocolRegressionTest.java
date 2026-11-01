@@ -500,21 +500,6 @@ public final class HeartbeatToolProtocolRegressionTest {
         require(askStatus.contains("询问用户：你希望先做哪一部分？")
                         && timestampedToolRows(askStatus) == 1,
                 "ask_user did not render one immediate compact activity row");
-        String visibleAnswer = AgentQuestionUi.buildVisibleAnswer(
-                askParsed.calls.get(0).questions,
-                new String[]{"先完成执行器", "标准"}, "");
-        require(("Question：你希望先做哪一部分？\n"
-                        + "Answer：先完成执行器\n\n"
-                        + "Question：动效强度怎么选？\n"
-                        + "Answer：标准").equals(visibleAnswer),
-                "ask_user answer was not converted to visible Question/Answer text");
-        String customAnswer = AgentQuestionUi.buildVisibleAnswer(
-                askParsed.calls.get(0).questions,
-                new String[]{"先写测试", null}, "第二题我想先实际体验再决定");
-        require(customAnswer.contains("Answer：先写测试")
-                        && customAnswer.endsWith(
-                        "Answer：第二题我想先实际体验再决定"),
-                "free-form answer did not fill an unanswered question");
         String invalidAsk = singleCallBlock(
                 "{\"id\":\"ask_bad\",\"tool\":\"ask_user\","
                         + "\"scope\":\"conversation-1234\",\"questions\":["
@@ -539,51 +524,6 @@ public final class HeartbeatToolProtocolRegressionTest {
                         .questions.get(0).options.get(1)),
                 "compact ask_user schema or object options were not normalized");
 
-        AgentToolConfig.Snapshot defaults = AgentToolConfig.defaults();
-        require(defaults.enabled
-                        && defaults.promptStrength
-                        == AgentToolConfig.PROMPT_STRENGTH_BASIC
-                        && AgentToolConfig.PERMISSION_ALL.equals(
-                        defaults.permission)
-                        && defaults.enabledTools.containsAll(
-                        AgentToolConfig.tools()),
-                "Agent defaults are not enabled/all-allowed with every tool on");
-        AgentToolConfig.Snapshot roundTrip = AgentToolConfig.decode(
-                AgentToolConfig.encode(defaults
-                        .withBackend(AgentToolConfig.BACKEND_ROOT)
-                        .withPromptStrength(
-                                AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE)
-                        .withTool(HeartbeatToolProtocol.TOOL_TAP_SCREEN, false)));
-        require(AgentToolConfig.BACKEND_ROOT.equals(roundTrip.backend)
-                        && roundTrip.promptStrength
-                        == AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE
-                        && !roundTrip.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_TAP_SCREEN)
-                        && roundTrip.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_ASK_USER),
-                "Agent settings JSON round-trip changed backend or tool toggles");
-        AgentToolConfig.Snapshot migrated = AgentToolConfig.decode(
-                "{\"version\":1,\"enabled\":true,\"backend\":\"in_app\","
-                        + "\"permission\":\"all\",\"enabled_tools\":[\"ask_user\"]}");
-        require(migrated.enabledTools.contains(HeartbeatToolProtocol.TOOL_READ_FILE)
-                        && migrated.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_WRITE_FILE)
-                        && migrated.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_SHELL),
-                "v1 Agent settings did not enable newly added file and shell tools");
-        require(AgentToolConfig.decode(
-                        "{\"version\":4,\"enabled\":true,"
-                                + "\"prompt_strength\":99}").promptStrength
-                        == AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE
-                        && AgentToolConfig.decode(
-                        "{\"version\":4,\"enabled\":true,"
-                                + "\"prompt_strength\":-8}").promptStrength
-                        == AgentToolConfig.PROMPT_STRENGTH_BASIC,
-                "out-of-range prompt intensity was not clamped");
-
-        require("'a'\\''b'".equals(AgentDeviceBridge.shellQuote("a'b")),
-                "shell path quoting did not escape a single quote safely");
-
         String networkBlock = singleCallBlock(
                 "{\"id\":\"net_001\",\"tool\":\"network_request\","
                         + "\"scope\":\"conversation-1234\","
@@ -602,13 +542,6 @@ public final class HeartbeatToolProtocolRegressionTest {
                         "X-Test: a'b")
                         && networkParsed.calls.get(0).content.contains("\"ok\":true"),
                 "structured network request was not parsed");
-        String curl = AgentDeviceBridge.networkCurlCommand(
-                networkParsed.calls.get(0));
-        require(curl.contains("curl --silent --show-error --location")
-                        && curl.contains("--request 'POST'")
-                        && curl.contains("--header 'X-Test: a'\\''b'")
-                        && curl.endsWith("'https://example.com/api?q=one'"),
-                "network request did not become a safely quoted curl command");
         require(HeartbeatToolProtocol.parse(singleCallBlock(
                         "{\"id\":\"net_bad\",\"tool\":\"network_request\","
                                 + "\"scope\":\"conversation-1234\","
@@ -622,12 +555,6 @@ public final class HeartbeatToolProtocolRegressionTest {
                                 + "\"headers\":{\"X-Test\":\"ok\\r\\nInjected: yes\"}}"))
                         .calls.isEmpty(),
                 "network request accepted a CRLF-injected header");
-        AgentToolConfig.Snapshot v6Migrated = AgentToolConfig.decode(
-                "{\"version\":6,\"enabled\":true,\"enabled_tools\":[\"ask_user\"]}");
-        require(v6Migrated.enabledTools.contains(
-                        HeartbeatToolProtocol.TOOL_NETWORK_REQUEST),
-                "v6 settings did not enable the new network tool during migration");
-
         String invalidTap = singleCallBlock(
                 "{\"id\":\"tap_bad\",\"tool\":\"tap_screen\","
                         + "\"scope\":\"conversation-1234\",\"x\":1001,\"y\":500}");
@@ -761,59 +688,28 @@ public final class HeartbeatToolProtocolRegressionTest {
                         && prompt.contains("控制块结束后必须立即停止输出")
                         && !prompt.contains("{\"calls\":["),
                 "default heartbeat prompt still permits multi-tool batches");
-        require(prompt.contains("坐标统一为 0 到 1000")
-                        && prompt.contains("不会在同一轮把像素返回给你")
-                        && prompt.contains("不得假装已经看见截图内容")
-                        && prompt.contains("Android 系统 PATH")
-                        && prompt.contains("收到结果前不得假装操作成功"),
-                "basic Agent prompt omitted coordinate or screenshot-result boundaries");
-
-        java.util.LinkedHashSet<String> toolsWithoutHeartbeat =
-                new java.util.LinkedHashSet<>();
-        for (String tool : AgentToolConfig.tools()) {
-            if (!AgentToolConfig.isHeartbeatTool(tool)) toolsWithoutHeartbeat.add(tool);
-        }
-        String heartbeatDisabledPrompt = HeartbeatToolProtocol.systemPrompt(
-                1785247200000L, "不应注入的旧约定", 180, "conversation-1234",
-                toolsWithoutHeartbeat, AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE);
-        require(heartbeatDisabledPrompt.contains("真实本地 Agent 工具")
-                        && heartbeatDisabledPrompt.contains("get_current_time")
-                        && heartbeatDisabledPrompt.contains("render_rich_panel")
-                        && heartbeatDisabledPrompt.contains(HeartbeatToolProtocol.RESULT_START),
-                "disabling heartbeat also removed the ordinary Agent contract");
-        require(!heartbeatDisabledPrompt.contains("心跳")
-                        && !heartbeatDisabledPrompt.contains("heartbeat")
-                        && !heartbeatDisabledPrompt.contains("schedule_once")
-                        && !heartbeatDisabledPrompt.contains("set_plan")
-                        && !heartbeatDisabledPrompt.contains("clear_plan")
-                        && !heartbeatDisabledPrompt.contains("set_interval")
-                        && !heartbeatDisabledPrompt.contains("bind_chat")
-                        && !heartbeatDisabledPrompt.contains("cancel_heartbeat")
-                        && !heartbeatDisabledPrompt.contains(HeartbeatToolProtocol.EVENT_START)
-                        && !heartbeatDisabledPrompt.contains("不应注入的旧约定"),
-                "heartbeat-disabled Agent prompt still exposed a heartbeat agreement or tool");
 
         String enhancedPrompt = HeartbeatToolProtocol.systemPrompt(
                 1785247200000L, "找用户闲聊", 180, "conversation-1234",
-                new java.util.LinkedHashSet<>(AgentToolConfig.tools()),
-                AgentToolConfig.PROMPT_STRENGTH_ENHANCED);
+                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.knownToolNames()),
+                HeartbeatToolProtocol.PROMPT_STRENGTH_ENHANCED);
         require(enhancedPrompt.contains("第二档（增强）")
                         && enhancedPrompt.contains("get_current_time")
-                        && enhancedPrompt.contains("ask_user")
-                        && enhancedPrompt.contains("read_file、write_file 或 shell")
-                        && enhancedPrompt.contains("capture_screen")
                         && enhancedPrompt.contains("render_rich_panel")
+                        && !enhancedPrompt.contains("ask_user")
+                        && !enhancedPrompt.contains("read_file")
+                        && !enhancedPrompt.contains("capture_screen")
                         && !enhancedPrompt.contains("第三档（沉浸）"),
-                "level-two guidance did not cover the complete Agent toolkit");
+                "level-two guidance did not match the reduced local tool set");
         String immersivePrompt = HeartbeatToolProtocol.systemPrompt(
                 1785247200000L, "找用户闲聊", 180, "conversation-1234",
-                new java.util.LinkedHashSet<>(AgentToolConfig.tools()),
-                AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE);
+                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.knownToolNames()),
+                HeartbeatToolProtocol.PROMPT_STRENGTH_IMMERSIVE);
         require(immersivePrompt.contains("第三档（沉浸）")
                         && immersivePrompt.contains("心情怎么样")
                         && immersivePrompt.contains("当前好感度")
                         && immersivePrompt.contains("首次记录")
-                        && immersivePrompt.contains("截图、文件、Shell、问答、时间、心跳与富面板")
+                        && immersivePrompt.contains("时间、心跳与富面板")
                         && immersivePrompt.contains("不会绕过工具开关"),
                 "level-three guidance omitted immersive or all-tool behavior boundaries");
 

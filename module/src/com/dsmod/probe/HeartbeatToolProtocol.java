@@ -51,6 +51,76 @@ final class HeartbeatToolProtocol {
     static final String TOOL_MUSIC = "music";
     static final String TOOL_RENDER_RICH_PANEL = "render_rich_panel";
 
+    // ---- Migrated from the retired Agent settings model --------------------------------
+    // The Agent feature (local tool execution and its settings panel) was removed. The members
+    // below were reused by the heartbeat tool pipeline, so they now live here instead.
+    static final int PROMPT_STRENGTH_BASIC = 1;
+    static final int PROMPT_STRENGTH_ENHANCED = 2;
+    static final int PROMPT_STRENGTH_IMMERSIVE = 3;
+
+    private static final String[] KNOWN_TOOLS = {
+            TOOL_SCHEDULE_ONCE, TOOL_SET_PLAN, TOOL_CLEAR_PLAN, TOOL_SET_INTERVAL,
+            TOOL_BIND_CHAT, TOOL_CANCEL_HEARTBEAT, TOOL_GET_CURRENT_TIME,
+            TOOL_ASK_USER, TOOL_RENDER_RICH_PANEL, TOOL_READ_FILE, TOOL_WRITE_FILE,
+            TOOL_NETWORK_REQUEST, TOOL_SHELL, TOOL_DELAY, TOOL_OPEN_APP,
+            TOOL_SCREEN_POWER, TOOL_MUSIC, TOOL_CAPTURE_SCREEN, TOOL_TAP_SCREEN,
+            TOOL_SWIPE_SCREEN, TOOL_PRESS_BACK};
+
+    /** Tool transcript rows stay visible now that the Agent settings panel is gone. */
+    static boolean hideToolLogs() {
+        return false;
+    }
+
+    /** Heartbeat tool blocks are always parsed and dispatched. */
+    static boolean enabledFast() {
+        return true;
+    }
+
+    /** The three-position prompt slider belonged to the Agent panel; keep the basic tier. */
+    static int promptStrength() {
+        return PROMPT_STRENGTH_BASIC;
+    }
+
+    static boolean isKnownTool(String tool) {
+        if (tool == null) return false;
+        for (String known : KNOWN_TOOLS) {
+            if (known.equals(tool)) return true;
+        }
+        return false;
+    }
+
+    /** Every tool name this protocol knows; the regression tests build tool sets from it. */
+    static java.util.List<String> knownToolNames() {
+        return java.util.Collections.unmodifiableList(
+                java.util.Arrays.asList(KNOWN_TOOLS));
+    }
+
+    static boolean isHeartbeatTool(String tool) {
+        return TOOL_SCHEDULE_ONCE.equals(tool) || TOOL_SET_PLAN.equals(tool)
+                || TOOL_CLEAR_PLAN.equals(tool) || TOOL_SET_INTERVAL.equals(tool)
+                || TOOL_BIND_CHAT.equals(tool) || TOOL_CANCEL_HEARTBEAT.equals(tool);
+    }
+
+    /** Only the heartbeat control tools survive the Agent removal. */
+    static boolean allows(String tool) {
+        return isHeartbeatTool(tool);
+    }
+
+    /** Tool set offered to the model: heartbeat controls plus the two read-only helpers. */
+    static java.util.Set<String> heartbeatTools(boolean heartbeatFeatureEnabled) {
+        if (!heartbeatFeatureEnabled) return java.util.Collections.emptySet();
+        java.util.LinkedHashSet<String> enabled = new java.util.LinkedHashSet<>();
+        enabled.add(TOOL_SCHEDULE_ONCE);
+        enabled.add(TOOL_SET_PLAN);
+        enabled.add(TOOL_CLEAR_PLAN);
+        enabled.add(TOOL_SET_INTERVAL);
+        enabled.add(TOOL_BIND_CHAT);
+        enabled.add(TOOL_CANCEL_HEARTBEAT);
+        enabled.add(TOOL_GET_CURRENT_TIME);
+        enabled.add(TOOL_RENDER_RICH_PANEL);
+        return java.util.Collections.unmodifiableSet(enabled);
+    }
+
     // Invisible presentation marker consumed by the host Compose text hook. It keeps tool status
     // styling separate from model-authored Markdown and remains visually harmless if a future
     // host build moves the renderer before its mapping is updated.
@@ -380,9 +450,9 @@ final class HeartbeatToolProtocol {
 
     static String renderConversationToolRows(String value) {
         Result parsed = parseForConversation(value);
-        if (AgentToolConfig.hideToolLogs()) return parsed.visibleText;
+        if (hideToolLogs()) return parsed.visibleText;
         if (!parsed.incompleteControlBlock) {
-            if (!AgentToolConfig.enabledFast()
+            if (!enabledFast()
                     || !parsed.calls.isEmpty() || !parsed.rejectedCalls.isEmpty()
                     || !looksLikeUnbackedToolClaim(value)) {
                 return parsed.visibleText;
@@ -433,7 +503,7 @@ final class HeartbeatToolProtocol {
     private static void appendToolRows(
             StringBuilder visible, List<ToolCall> calls, int firstCall) {
         if (firstCall < 0 || firstCall >= calls.size()) return;
-        boolean hideStatus = AgentToolConfig.hideToolLogs();
+        boolean hideStatus = hideToolLogs();
         boolean hasPanel = false;
         for (int index = firstCall; index < calls.size(); index++) {
             ToolCall call = calls.get(index);
@@ -467,7 +537,7 @@ final class HeartbeatToolProtocol {
             StringBuilder visible, List<RejectedCall> rejectedCalls,
             int firstCall) {
         if (firstCall < 0 || firstCall >= rejectedCalls.size()) return;
-        if (AgentToolConfig.hideToolLogs()) return;
+        if (hideToolLogs()) return;
         appendParagraphBreak(visible);
         boolean chinese = Locale.getDefault().getLanguage().toLowerCase(Locale.US)
                 .startsWith("zh");
@@ -1389,6 +1459,7 @@ final class HeartbeatToolProtocol {
                 + "\",\"mode\":\"all_once\"}\n"
                 + "get_current_time：{\"id\":\"唯一短标识\","
                 + "\"tool\":\"get_current_time\",\"scope\":\"" + scope + "\"}\n"
+                /* LOCAL TOOL EXAMPLES REMOVED: only heartbeat tools are provided now.
                 + "capture_screen：{\"id\":\"唯一短标识\","
                 + "\"tool\":\"capture_screen\",\"scope\":\"" + scope + "\"}\n"
                 + "tap_screen：{\"id\":\"唯一短标识\",\"tool\":\"tap_screen\","
@@ -1429,6 +1500,7 @@ final class HeartbeatToolProtocol {
                 + "music 本地文件：{\"id\":\"唯一短标识\",\"tool\":\"music\","
                 + "\"scope\":\"" + scope + "\",\"action\":\"play\","
                 + "\"source\":\"local\",\"path\":\"/绝对路径/audio.flac\"}\n"
+                */
                 + "render_rich_panel：{\"id\":\"唯一短标识\","
                 + "\"tool\":\"render_rich_panel\",\"scope\":\"" + scope + "\","
                 + "\"panel\":{\"preset\":\"dashboard\",\"title\":\"状态面板\","
@@ -1448,6 +1520,7 @@ final class HeartbeatToolProtocol {
                 + "once 还必须用 target_id 指定原 schedule_once 的 id，"
                 + "all_once 取消此对话全部一次性心跳，periodic 关闭周期心跳，"
                 + "all 同时取消两者。"
+                /* DEVICE TOOL RULES REMOVED: those tools no longer exist.
                 + "tap_screen 和 swipe_screen 的坐标统一为 0 到 1000：左上角是 0,0，"
                 + "右下角是 1000,1000；duration_ms 只能为 120 到 1200。"
                 + "capture_screen 会先获取当前屏幕，但不会在同一轮把像素返回给你；"
@@ -1478,6 +1551,7 @@ final class HeartbeatToolProtocol {
                 + "已安装 QQ 音乐时会搜索匹配歌曲并用 songmid 发起真实播放；失败后必须把错误告诉用户，"
                 + "不得自行重复同一 music 调用。"
                 + "play 只恢复当前媒体会话；收到成功结果前不得声称指定歌曲已经播放。"
+                */
                 + "render_rich_panel 用结构化数据直接在本条回复中生成可见的面板或图形。"
                 + "panel.mode 可为 panel、standalone、art、canvas：panel 会绘制完整信息卡，"
                 + "standalone/art/canvas 不绘制最外层卡片，可单独显示符号、图案或组合画布。"
@@ -1548,7 +1622,7 @@ final class HeartbeatToolProtocol {
                                java.util.Set<String> enabledTools) {
         return systemPrompt(now, existingPlan, intervalMinutes,
                 conversationScope, enabledTools,
-                AgentToolConfig.load().promptStrength);
+                promptStrength());
     }
 
     static String systemPrompt(long now, String existingPlan, int intervalMinutes,
@@ -1558,7 +1632,7 @@ final class HeartbeatToolProtocol {
         ArrayList<String> names = new ArrayList<>();
         if (enabledTools != null) {
             for (String tool : enabledTools) {
-                if (AgentToolConfig.isKnownTool(tool)) names.add(tool);
+                if (isKnownTool(tool)) names.add(tool);
             }
         }
         if (names.isEmpty()) {
@@ -1567,7 +1641,7 @@ final class HeartbeatToolProtocol {
         }
         boolean heartbeatEnabled = false;
         for (String tool : names) {
-            if (AgentToolConfig.isHeartbeatTool(tool)) {
+            if (isHeartbeatTool(tool)) {
                 heartbeatEnabled = true;
                 break;
             }
@@ -1674,35 +1748,32 @@ final class HeartbeatToolProtocol {
 
     private static String promptStrengthGuidance(
             int promptStrength, boolean heartbeatEnabled) {
-        if (promptStrength <= AgentToolConfig.PROMPT_STRENGTH_BASIC) return "";
+        if (promptStrength <= PROMPT_STRENGTH_BASIC) return "";
         String enhanced = "\n当前工具提示强度为第二档（增强）。不要把本地工具理解成只适用于"
                 + "编程或办公：在普通聊天中，只要工具能明显提高准确性、表达效果或完成度，也可以"
                 + "自然使用，但不要为了展示能力而强行调用。根据语境适配整套已启用工具：需要准确"
-                + "设备时间时使用 get_current_time；出现会实质改变答案的多种方向时使用 ask_user；"
+                + "设备时间时使用 get_current_time；"
                 + (heartbeatEnabled
                 ? "用户要求稍后提醒、主动联系或调整约定时使用心跳工具；"
                 : "")
-                + "用户要求处理本地内容时按需"
-                + "使用 read_file、write_file 或 shell；需要从网络获取实时数据或调用 HTTP 接口时"
-                + "使用 network_request；用户明确要求观察或操作当前界面时可依次"
-                + "使用 capture_screen、tap_screen、swipe_screen、press_back；状态、对比、进度、"
-                + "公式、角色资料或普通文字不够直观时使用 render_rich_panel。仍需一次只调用一个"
+                + "状态、对比、进度、公式、角色资料或普通文字不够直观时"
+                + "使用 render_rich_panel。仍需一次只调用一个"
                 + "工具并等待真实结果；一句自然回复已经足够时不要调用工具。";
-        if (promptStrength < AgentToolConfig.PROMPT_STRENGTH_IMMERSIVE) {
+        if (promptStrength < PROMPT_STRENGTH_IMMERSIVE) {
             return enhanced;
         }
         return enhanced
                 + "\n当前工具提示强度为第三档（沉浸）。在用户目标明确且下一步安全、可逆、属于当前"
                 + "任务时，可以更主动地选择已启用工具完成下一步，不必为显而易见的中间步骤反复询问；"
                 + "复杂任务可在每次收到真实结果后继续调用下一个工具。若关键选择会改变目标、覆盖重要"
-                + "数据、产生外部影响或涉及不可逆操作，仍必须先用 ask_user 或普通问题取得确认。"
+                + "数据、产生外部影响或涉及不可逆操作，仍必须先向用户确认。"
                 + "在闲聊、人设或角色扮演语境中，可以把富面板用于更有趣的叙事状态，例如当前心情、"
                 + "好感度、讨厌值、能量、关系阶段、心情波动、事件时间线和阶段变化；当用户询问“心情"
                 + "怎么样”“当前好感度”“关系进展”或要求查看角色状态时，优先考虑 character 或 game"
                 + " 预设，而不是只用普通文字报数。只有对话中确实存在上次状态与时间时，才能展示变化"
                 + "量、经过时间和前后对比；没有历史基准时标记为首次记录，禁止捏造旧数值。此类心情和"
                 + "好感是当前人设中的叙事状态，不是假装拥有真实生理感受；除非用户询问，不要用免责声明"
-                + "破坏沉浸感。工作语境下则主动把截图、文件、Shell、问答、时间"
+                + "破坏沉浸感。工作语境下则主动把时间"
                 + (heartbeatEnabled ? "、心跳" : "") + "与富面板组成"
                 + "逐步工作流。第三档只增强使用倾向，不会绕过工具开关、权限模式、对话作用域、隐私"
                 + "限制或破坏性操作确认。";

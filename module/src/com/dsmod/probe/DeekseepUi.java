@@ -1427,13 +1427,6 @@ public final class DeekseepUi {
                     }
                 }, heartbeatDetail));
 
-        card.addView(makeDivider(act, divColor));
-        card.addView(toolActionRow(act, "Agent · 实验性",
-                "管理本地工具、权限模式以及 Root / Shizuku 后端。",
-                textColor, subColor, new View.OnClickListener() {
-                    @Override public void onClick(View v) { AgentSettingsUi.show(act); }
-                }));
-
         filterCategoryRows(card, category);
 
         // Footer is appended after filtering so it remains present on every category page.

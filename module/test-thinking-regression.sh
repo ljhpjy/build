@@ -81,9 +81,6 @@ javac -source 8 -target 8 -cp "$JSON_JAR:$ANDROID_JAR:$UNIVERSAL_CLASSES:build/c
     src/com/dsmod/probe/AgentRunStore.java \
     src/com/dsmod/probe/ChatBackupStore.java \
     src/com/dsmod/probe/DeekseepTools.java \
-    src/com/dsmod/probe/AgentToolConfig.java \
-    src/com/dsmod/probe/AgentQuestionUi.java \
-    src/com/dsmod/probe/AgentDeviceBridge.java \
     src/com/dsmod/probe/ProactiveHeartbeatReceiver.java \
     src/com/dsmod/probe/QqMusicPlaybackService.java \
     src/com/dsmod/probe/LocalAudioPlaybackService.java \

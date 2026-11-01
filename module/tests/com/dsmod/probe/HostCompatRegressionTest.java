@@ -11,10 +11,30 @@ public final class HostCompatRegressionTest {
     private static final class kw {}
     private static final class iw {}
 
+    /** Simple-name probe target: the 2.3.6 chat ViewModel getter returns {@code lq}. */
+    private static final class lq {}
+
+    /** Shape stand-in for the 2.3.6 {@code td1} chat ViewModel. */
+    private static final class V236ChatViewModel {
+        public lq G() { return null; }
+        public void M(Object first, Object second) {}
+    }
+
+    /** Shape stand-in for the 2.3.6 {@code kd1} coroutine continuation. */
+    private static final class V236Continuation {
+        public lq G() { return null; }
+        public void resumeWith(Object result) {}
+    }
+
     public static void main(String[] args) throws Exception {
-        check(HostCompat.hasV236ChatViewModel(
-                        HostCompatRegressionTest.class.getClassLoader()),
+        // The 2.3.6 host ships both td1 (the chat ViewModel) and kd1 (the continuation it
+        // reuses), so the generation marker has to come from td1's own contract instead of
+        // kd1's absence. The shapes are declared here because the test class path contains no
+        // obfuscated host code to probe.
+        check(HostCompat.hasV236ChatViewModelShape(V236ChatViewModel.class),
                 "2.3.6 td1 contract detected even when kd1 also exists");
+        check(!HostCompat.hasV236ChatViewModelShape(V236Continuation.class),
+                "2.3.6 kd1 continuation must not be mistaken for the chat ViewModel");
         setV230(false);
         equals("u25", HostCompat.name("u25"), "legacy class identity");
         equals("O", HostCompat.messageMethod("O"), "legacy message method identity");

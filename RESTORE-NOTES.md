@@ -16,15 +16,16 @@
 
 ## 当前验证状态（务必先读）
 
-**javac 从未执行过。** 本目录所有结论均来自文本级结构核对（`mt_file_read_text` /
-`mt_file_search_text`），不是编译或运行验证。所谓"已恢复"只表示代码已写入且引用关系在
-文本上自洽，不代表能编译通过或功能可用。
+GitHub Action `Build and test source edition` 已经跑过编译链路：
 
-唯一的验证方式：
+- `javac`、`d8`、`aapt2`、`zipalign`、`apksigner` 在两个渠道上全部通过，
+  `ds-probe-universal.apk` 与 `ds-probe-universal-google-play.apk` 均已产出并签名。
+- 当前阻断点在**回归测试**（`scripts/build-all.sh` 的测试段），不在编译。
+
+也就是说"能编译"已由 CI 证实；"功能可用"仍未经真机验证。本地完整复核：
 
 ```sh
-cd project/Deekseep-1.7.5-restored/module-legacy && bash build.sh
-cd ../module-universal && bash build.sh
+cd project/Deekseep-1.7.5-restored && bash scripts/build-all.sh
 ```
 
 ## 已恢复文件
@@ -90,3 +91,76 @@ cd project/Deekseep-1.7.5-restored/module-legacy && bash build.sh 2>&1 | tee /sd
 2. `Main.completeViaHost` 对 `expertRelaySessionError`、`liveR92`、`liveQ71` 的引用
 3. `HostCompat.complete` 的反射签名与 `describeCause`
 4. `PublicTunnelManager.PREFS` / `KEY_DIRECT_ROOT` 的跨类可见性（`LocalApiGateway.directRoot()` 引用）
+
+## GitHub Action 排障记录
+
+### 第一轮：javac（10 个错误）
+
+| 错误 | 修复 |
+|---|---|
+| `LocalApiGateway.modelsPayload()` 未捕获 `JSONException` | 整段包 `try/catch (Throwable ignored)` |
+| `PublicTunnelManager` 用了 `KeyGenParameterSpec.PURPOSE_*` | 改用 `KeyProperties.PURPOSE_*` / `BLOCK_MODE_GCM` / `ENCRYPTION_PADDING_NONE`，并补 import |
+| `PublicTunnelManager.pid` 不存在 | 改为 `PublicTunnelManager.process = null` |
+| `PinggyTunnelManager.LOCK/requested/pid/state` 不存在 | 改用实际字段短名 `c`/`k`/`l`/`m`，常量走 `PREFS`/`KEY_REQUESTED`/`STATE_*` |
+| `NotificationIcons.newBuilder(...)` 不存在 | 改为 `new Notification.Builder(this, CHANNEL_ID)` |
+| `PinggyTunnelManager` 缺长名别名 | 补 `LOCK = c` 与 `isRequested()`/`setRequested()`/`getPid()`/`getState()` |
+
+### 第二轮：回归测试（1 个断言 + 2 处死引用）
+
+| 问题 | 修复 |
+|---|---|
+| `HostCompatRegressionTest:254` 断言 `hasV236ChatViewModel(testClassLoader)` 为真，但测试 classpath 里没有 `td1` 类，恒为假 | 拆出 `HostCompat.hasV236ChatViewModelShape(Class<?>)`；测试改用自带的 `V236ChatViewModel` / `V236Continuation` 形状桩：正例必中、`kd1` 反例不得命中 |
+| `scripts/build-all.sh` 仍调用已删除的 `module/test-expert-relay-regression.sh`（1.7.5 已移除 `com.dsmod.relay`） | 删掉该步骤，并删除脚本本身 |
+| `SettingsActivity` 新增的中文文案没进 `UiLanguageCatalog`，`test-language-catalog.sh` 会判失败 | 补 53 条本地 API / 公网隧道 / 前台保活中英对照 |
+
+### 尚未在 CI 中跑到的段落
+
+上一轮日志里，`HostCompatRegressionTest` 之后的 12 个 java 回归测试、
+`./test-language-catalog.sh`、`test-adapter-regression.sh` 以及末尾的签名/一致性校验都还没执行过。
+
+
+## 功能移除记录（用户要求）
+
+### 公网隧道（整体删除）
+
+- 删除 `PublicTunnelManager.java`、`PinggyTunnelManager.java`
+- `SettingsActivity`：移除「公网隧道」整块 UI（Cloudflare 配置/启停、Pinggy 启停）与三个处理方法
+- `LocalApiGateway`：去掉 `setGatewayState`/`setLocalPort` 调用；`directRoot()` 恒返回空、`publicBaseUrl()` 退回局域网地址
+- `LocalApiKeepAliveService`：`onDestroy` 去掉隧道清理；通知文案去掉「公网入口」分支
+- `Main`：自动恢复钩子不再拉起隧道
+- `UiLanguageCatalog`：删除 12 条隧道词条
+
+### Agent · 实验性（功能 + UI 全部移除，复用部分已迁移）
+
+已删除类：`AgentSettingsUi`、`AgentRunUi`、`AgentQuestionUi`、`AgentDeviceBridge`、
+`AgentToolConfig`、`AgentDelayActivity`、`AgentDelayReceiver`
+
+迁移（心跳仍在复用）：
+
+- `ToolResult.java`（新文件）—— 承接原 `AgentDeviceBridge.ToolResult`（6 个 final 字段 + 同签名构造器）
+- `HeartbeatToolProtocol` 新增：`PROMPT_STRENGTH_BASIC/ENHANCED/IMMERSIVE`、`hideToolLogs()`、
+  `enabledFast()`、`promptStrength()`、`isKnownTool()`、`isHeartbeatTool()`、`allows()`、
+  `heartbeatTools(boolean)`、`knownToolNames()`
+
+`Main` 改动：
+
+- 工具分发链保留 8 个分支（6 个心跳 + `get_current_time` + `render_rich_panel`），其余 5 组
+  （ask_user / delay / music / 界面操作 / 文件·Shell·网络）统一返回「已在当前版本中移除」
+- 删除 `queueAgentQuestion`、`queueAgentDataTool`、`queueAgentUiTool`、`queueAgentMusic`、`queueAgentDelay`
+- 16 处 `AgentToolConfig.*` 改指 `HeartbeatToolProtocol.*`（`enabledFast`×10、`effectiveTools`×2、
+  `allows`、`isHeartbeatTool`、`promptStrength`、`load().enabled`）
+- `probeConfiguredAgentBackendOnce` 改为空实现（保留调用点，Root/Shizuku 后端随之移除）
+- `handleAgentDelayComplete` 的 4 个 `EXTRA_*` 常量改为字面量
+
+测试调整：删除「Agent 设置序列化/迁移」整段；`AgentQuestionUi.buildVisibleAnswer` 相关断言删除；
+提示词强度测试改指 `HeartbeatToolProtocol.knownToolNames()`；`test-thinking-regression.sh` 的编译清单
+去掉 3 个已删文件。
+
+保留件（与 Agent 无关）：`AgentRunStore`（结果队列，心跳在用）、`DeekseepTools`（导出/统计/备份）、
+`TaskExecutionUi`（通用任务弹窗）。
+
+### 影响
+
+- 心跳仍可用：6 个自调度工具 + `get_current_time` + `render_rich_panel`
+- 不再向模型提供设备类工具（文件、Shell、网络、截屏、点击、滑动、音乐、延时、提问）
+- 设置页不再有「Agent · 实验性」「公网隧道」入口

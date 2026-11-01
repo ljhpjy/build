@@ -202,7 +202,23 @@ final class HostCompat {
 
     static boolean hasV236ChatViewModel(ClassLoader loader) {
         try {
-            Class<?> candidate = Class.forName("td1", false, loader);
+            return hasV236ChatViewModelShape(Class.forName("td1", false, loader));
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Matches the 2.3.6 {@code td1} chat-ViewModel contract on an already resolved class.
+     *
+     * <p>Split out of {@link #hasV236ChatViewModel(ClassLoader)} so the regression test can
+     * assert the contract against a stand-in class: 2.3.6 reuses {@code kd1} for the ViewModel's
+     * coroutine continuation, so both names exist in the same APK and only td1's own shape may
+     * act as the generation marker.</p>
+     */
+    static boolean hasV236ChatViewModelShape(Class<?> candidate) {
+        if (candidate == null) return false;
+        try {
             boolean sessionGetter = false;
             boolean reducer = false;
             for (Method method : candidate.getDeclaredMethods()) {

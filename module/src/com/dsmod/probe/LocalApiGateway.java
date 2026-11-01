@@ -249,8 +249,6 @@ abstract class LocalApiGateway {
                 port = socket.getLocalPort();
                 running = true;
                 lastError = "";
-                PublicTunnelManager.setGatewayState(true, port);
-                PinggyTunnelManager.setLocalPort(port);
                 acceptThread = new Thread(new Runnable() {
                     @Override
                     public void run() {
@@ -309,8 +307,6 @@ abstract class LocalApiGateway {
             }
             CLIENTS.clear();
             if (port > 0) log("STOP port=" + port);
-            PublicTunnelManager.setGatewayState(false, 0);
-            PinggyTunnelManager.setLocalPort(0);
             protocol = currentProtocol();
             out.putBoolean("accepted", true);
             fillStatus(ctx, out);
@@ -711,35 +707,13 @@ abstract class LocalApiGateway {
         return model;
     }
 
-    /**
-     * Resolves the public base URL configured through {@code direct_root}. When set, OpenAI and
-     * Anthropic clients should use this root instead of the LAN address; the gateway itself keeps
-     * listening locally, so this only affects the reported {@code endpoint}.
-     */
+    /** Public tunnels were dropped; the gateway only listens on the local network. */
     static String directRoot() {
-        Context ctx = appContext;
-        if (ctx == null) return "";
-        String value = ctx.getSharedPreferences(PublicTunnelManager.PREFS, 0)
-                .getString(PublicTunnelManager.KEY_DIRECT_ROOT, "");
-        if (value == null) return "";
-        String trimmed = value.trim();
-        while (trimmed.endsWith("/")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1);
-        }
-        return trimmed;
+        return "";
     }
 
-    /** Base URL clients should use, honouring {@code direct_root} when configured. */
+    /** Base URL clients should use. Without a tunnel this is the LAN address. */
     static String publicBaseUrl() {
-        String direct = directRoot();
-        if (direct.length() > 0) {
-            return direct + protocolPrefix();
-        }
-        Bundle tunnel = PublicTunnelManager.status(appContext);
-        String primary = tunnel.getString("primary_root", "");
-        if (primary != null && primary.trim().length() > 0) {
-            return primary.trim() + protocolPrefix();
-        }
         return baseUrl();
     }
 
