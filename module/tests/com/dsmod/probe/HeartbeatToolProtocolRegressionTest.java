@@ -683,7 +683,7 @@ public final class HeartbeatToolProtocolRegressionTest {
 
         String enhancedPrompt = HeartbeatToolProtocol.systemPrompt(
                 1785247200000L, "找用户闲聊", 180, "conversation-1234",
-                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.knownToolNames()),
+                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.heartbeatTools(true)),
                 HeartbeatToolProtocol.PROMPT_STRENGTH_ENHANCED);
         require(enhancedPrompt.contains("第二档（增强）")
                         && enhancedPrompt.contains("get_current_time")
@@ -695,7 +695,7 @@ public final class HeartbeatToolProtocolRegressionTest {
                 "level-two guidance did not match the reduced local tool set");
         String immersivePrompt = HeartbeatToolProtocol.systemPrompt(
                 1785247200000L, "找用户闲聊", 180, "conversation-1234",
-                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.knownToolNames()),
+                new java.util.LinkedHashSet<>(HeartbeatToolProtocol.heartbeatTools(true)),
                 HeartbeatToolProtocol.PROMPT_STRENGTH_IMMERSIVE);
         require(immersivePrompt.contains("第三档（沉浸）")
                         && immersivePrompt.contains("心情怎么样")
