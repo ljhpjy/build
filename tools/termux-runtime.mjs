@@ -80,8 +80,7 @@ export async function ensureRuntime({ abi, runtimeDir, force = false, log = cons
   const packages = resolvePackages(index, ['nodejs', 'ca-certificates']);
   log(`  依赖包：${[...packages.values()].map((p) => `${p.name} ${p.version}`).join(', ')}`);
 
-  const debs = await Promise.all(
-    mapLimit([...packages.values()], 4, async (pkg) => {
+  const debs = await mapLimit([...packages.values()], 4, async (pkg) => {
       const filename = pkg.filename.replace(/^\.?\//, '');
       const out = path.join(absoluteWork, 'debs', `${pkg.name.replace(/[^A-Za-z0-9._+-]/g, '_')}.deb`);
       if (!fs.existsSync(out)) {
@@ -91,8 +90,7 @@ export async function ensureRuntime({ abi, runtimeDir, force = false, log = cons
         fs.writeFileSync(out, buf);
       }
       return { pkg, deb: out };
-    }),
-  );
+    });
 
   const merged = path.join(absoluteWork, 'merged');
   for (const { pkg, deb } of debs) {
