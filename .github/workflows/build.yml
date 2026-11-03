@@ -121,6 +121,31 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
 
+      - name: 准备 Android NDK（Go x86_64 PIE 需要）
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          if [ -n "${ANDROID_NDK_HOME:-}" ] && [ -d "${ANDROID_NDK_HOME}/toolchains/llvm" ]; then
+            echo "使用 ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+            exit 0
+          fi
+
+          if ls "$SDK"/ndk/*/toolchains/llvm >/dev/null 2>&1; then
+            echo "使用预装 NDK："
+            ls "$SDK"/ndk
+            exit 0
+          fi
+
+          for version in 27.0.12077973 27.2.12479018 26.3.11579264; do
+            echo "尝试安装 NDK $version …"
+            if sdkmanager "ndk;$version"; then
+              exit 0
+            fi
+          done
+
+          echo "::warning::NDK 安装失败，将使用静态 exe 兜底；x86_64 可能无法执行 PoW"
+
       - name: 安装 Gradle
         run: |
           curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
