@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { loadConfig } from './config.mjs';
 import { createLogger } from './logger.mjs';
 import { createEngine } from './engine.mjs';
@@ -6,6 +9,14 @@ import { createServer } from './server.mjs';
 const config = loadConfig();
 const logger = createLogger(config.logLevel);
 
+// Android 外壳靠这个文件清理「应用进程被杀、Node 变成孤儿」的情况。
+const pidFile = path.join(config.dataDir, 'server.pid');
+try {
+  fs.writeFileSync(pidFile, `${process.pid}\n`);
+} catch (err) {
+  logger.warn('写入 server.pid 失败:', err.message);
+}
+
 const web = await createEngine({ config, logger });
 const server = createServer({ config, logger, web });
 
@@ -13,6 +24,11 @@ const shutdown = async (signal) => {
   logger.info(`收到 ${signal}，正在关闭…`);
   server.close();
   await web.close().catch(() => {});
+  try {
+    fs.rmSync(pidFile, { force: true });
+  } catch {
+    /* ignore */
+  }
   process.exit(0);
 };
 

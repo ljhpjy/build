@@ -51,7 +51,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val pollRunnable = object : Runnable {
+    private val pollRunnable: Runnable = object : Runnable {
         override fun run() {
             if (!polling) return
             val port = RuntimeInstaller.currentPort(this@MainActivity)

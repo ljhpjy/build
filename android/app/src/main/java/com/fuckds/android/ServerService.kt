@@ -141,7 +141,6 @@ class ServerService : Service() {
             foreground("正在启动服务…")
             val process = launchNode(installed)
             nodeProcess = process
-            writeNodePid(process)
             startedAtElapsed = SystemClock.elapsedRealtime()
             acquireWakeLock()
             startLogPump(process, installed.logFile)
@@ -355,17 +354,12 @@ class ServerService : Service() {
         }, "fuckds-log").start()
     }
 
-    private fun writeNodePid(process: Process) {
-        try {
-            File(filesDir, "fuckds/node.pid").writeText("${process.pid()}\n")
-        } catch (_: Throwable) {
-            /* ignore */
-        }
-    }
+    /** Node 启动时会自己写 data/server.pid；这里只负责读取/删除。 */
+    private fun nodePidFile(): File = File(RuntimeInstaller.appDir(this), "data/server.pid")
 
     private fun deleteNodePid() {
         try {
-            File(filesDir, "fuckds/node.pid").delete()
+            nodePidFile().delete()
         } catch (_: Throwable) {
             /* ignore */
         }
@@ -376,7 +370,7 @@ class ServerService : Service() {
      * 启动前按 pid 文件找到它（先确认 cmdline 是我们自己的 node），结束掉再启动。
      */
     private fun cleanupStaleNode() {
-        val pidFile = File(filesDir, "fuckds/node.pid")
+        val pidFile = nodePidFile()
         if (!pidFile.isFile) return
         val pid = pidFile.readText().trim().toIntOrNull()
         pidFile.delete()
