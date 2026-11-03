@@ -10,7 +10,7 @@ on:
       refresh_termux:
         description: '忽略缓存的 Termux 运行时，重新下载'
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -227,22 +227,3 @@ jobs:
           path: fuckds-${{ steps.version.outputs.name }}-${{ matrix.abi }}.apk
           if-no-files-found: error
           retention-days: 30
-
-  release:
-    name: 发布 Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-24.04
-    steps:
-      - name: 下载构建产物
-        uses: actions/download-artifact@v4
-        with:
-          pattern: fuckds-apk-*
-          merge-multiple: true
-          path: dist
-
-      - name: 创建 GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.apk
-          generate_release_notes: true
