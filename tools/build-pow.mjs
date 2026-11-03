@@ -14,7 +14,7 @@ import { loadAligns, readElf } from './elf.mjs';
  *
  * 另外 Android 构建固定 -tags=purego，不链接 ARMv8.2 SHA3 汇编，避免部分设备 SIGILL。
  */
-export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
+export function buildPow({ projectRoot, goarch, outFile, log = console.log, strategies = null }) {
   const srcDir = path.join(projectRoot, 'app', 'pow-src');
   if (!fs.existsSync(path.join(srcDir, 'go.mod'))) {
     throw new Error(`找不到 Go 源码：${srcDir}/go.mod`);
@@ -37,7 +37,7 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
   const pieArgs = ['build', '-trimpath', '-tags=purego', '-buildmode=pie', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
   const exeArgs = ['build', '-trimpath', '-tags=purego', '-buildmode=exe', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
 
-  const attempts = [];
+  const allAttempts = [];
 
   // 优先用 NDK clang 做外部链接：
   // - android/amd64 的 PIE 必须外部链接
@@ -53,7 +53,8 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
         CGO_LDFLAGS: '-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384',
       };
       if (fs.existsSync(cxx)) env.CXX = cxx;
-      attempts.push({
+      allAttempts.push({
+        kind: 'ndk',
         label: `PIE（NDK ${path.basename(ndk)} 外部链接，16KB 对齐）`,
         env,
         args: pieArgs,
@@ -65,8 +66,15 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
     log('⚠️  没有找到 Android NDK；会尝试 Go 内部 PIE / 静态 exe 兜底');
   }
 
-  attempts.push({ label: 'PIE（Go 内部链接）', env: { CGO_ENABLED: '0' }, args: pieArgs });
-  attempts.push({ label: '静态 exe（非 PIE 兜底）', env: { CGO_ENABLED: '0' }, args: exeArgs });
+  allAttempts.push({ kind: 'internal', label: 'PIE（Go 内部链接）', env: { CGO_ENABLED: '0' }, args: pieArgs });
+  allAttempts.push({ kind: 'exe', label: '静态 exe（非 PIE 兜底）', env: { CGO_ENABLED: '0' }, args: exeArgs });
+
+  const attempts = strategies
+    ? allAttempts.filter((attempt) => strategies.includes(attempt.kind))
+    : allAttempts;
+  if (!attempts.length) {
+    throw new Error(`没有可用的 PoW 构建策略：${strategies?.join(', ') || '(空)'}`);
+  }
 
   let built = false;
   for (const attempt of attempts) {

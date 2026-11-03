@@ -42,7 +42,7 @@ object RuntimeInstaller {
     private const val INSTALL_PREFS = "fuckds-install"
     private const val KEY_VERSION = "versionCode"
     private const val KEY_ABI = "runtimeAbi"
-    private const val DEFAULT_PORT = 8787
+    private const val DEFAULT_PORT = 8765
     private const val MIN_FREE_BYTES = 180L * 1024 * 1024
 
     @Synchronized
@@ -122,6 +122,12 @@ object RuntimeInstaller {
 
         nodeExe.setExecutable(true, false)
         powExe.setExecutable(true, false)
+        // 备用 PoW 版本（ds-pow-static / ds-pow-exe）也要可执行
+        File(runtimeDir, "bin").listFiles()?.forEach { file ->
+            if (file.isFile && file.name.startsWith("ds-pow")) {
+                file.setExecutable(true, false)
+            }
+        }
         if (!nodeExe.canExecute()) {
             throw IllegalStateException("Node 运行时无法执行（targetSdk 必须 <= 28，或系统限制了应用私有目录 exec）")
         }

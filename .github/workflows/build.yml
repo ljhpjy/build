@@ -37,11 +37,6 @@ jobs:
             flavor: Arm64
             dir: arm64
             goarch: arm64
-          - abi: x86_64
-            flavor: X64
-            dir: x64
-            goarch: amd64
-
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4

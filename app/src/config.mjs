@@ -92,7 +92,7 @@ export function loadConfig(env = process.env) {
     logLevel: str(env.LOG_LEVEL, 'info'),
     server: {
       host: str(env.HOST, '127.0.0.1'),
-      port: int(env.PORT, 8787),
+      port: int(env.PORT, 8765),
       apiKey: str(env.API_KEY),
       cors: str(env.CORS_ORIGIN, '*'),
     },

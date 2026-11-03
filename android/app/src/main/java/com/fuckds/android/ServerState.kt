@@ -13,7 +13,7 @@ enum class ServerPhase {
 data class ServerSnapshot(
     val phase: ServerPhase = ServerPhase.STOPPED,
     val message: String = "未启动",
-    val port: Int = 8787,
+    val port: Int = 8765,
 )
 
 /** 服务和界面在同一进程，用这个单例广播状态就够了。 */

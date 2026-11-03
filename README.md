@@ -43,8 +43,10 @@ DeepSeek `userToken` 即可使用。
 
 | 客户端 | base_url | API Key | 模型 |
 | --- | --- | --- | --- |
-| OpenAI SDK / 兼容客户端 | `http://127.0.0.1:8787/v1` | 任意（除非你配了 `API_KEY`） | `deepseek-flash` / `deepseek-reasoner` 等 |
-| Anthropic SDK | `http://127.0.0.1:8787` | 同上 | 同上 |
+| OpenAI SDK / 兼容客户端 | `http://127.0.0.1:8765/v1` | 任意（除非你配了 `API_KEY`） | `deepseek-flash` / `deepseek-reasoner` 等 |
+| Anthropic SDK | `http://127.0.0.1:8765` | 同上 | 同上 |
+
+> 默认端口是 **8765**。要换端口可以在 App「设置」里改，或在控制台「设置」页修改后重启。
 
 > 服务只监听 `127.0.0.1`：**同一台手机上**的其他 App（如酒馆、各种客户端）可以访问，
 > 局域网里的电脑/手机访问不到。这是有意的安全默认值。

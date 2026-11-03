@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
     private var lastHealth: HealthClient.Health? = null
 
     private var polling = false
-    private var currentPort = 8787
+    private var currentPort = 8765
     private var currentSnapshot = ServerState.snapshot
     private var displayPhase = ServerPhase.STOPPED
     private var pendingAutoStart = false

@@ -31,15 +31,43 @@ const runtimeInfo = await ensureRuntime({
   force: Boolean(args.force),
 });
 
+const runtimeBin = path.join(runtimeDir, 'bin');
 const pow = buildPow({
   projectRoot: ROOT,
   goarch,
-  outFile: path.join(runtimeDir, 'bin', 'ds-pow'),
+  outFile: path.join(runtimeBin, 'ds-pow'),
 });
+
+// 额外准备两个备用版本：Node 侧在 ds-pow 崩溃时会自动切换。
+// -static：Go 内部链接的静态 PIE（没有 cgo/NDK 依赖）
+// -exe：静态 ET_EXEC（最后兜底）
+const powVariants = [];
+for (const [suffix, strategy] of [
+  ['-static', 'internal'],
+  ['-exe', 'exe'],
+]) {
+  const out = path.join(runtimeBin, `ds-pow${suffix}`);
+  try {
+    const variant = buildPow({
+      projectRoot: ROOT,
+      goarch,
+      outFile: out,
+      strategies: [strategy],
+    });
+    powVariants.push({ name: `ds-pow${suffix}`, type: variant.type, machine: variant.machine });
+  } catch (err) {
+    console.warn(`⚠️  PoW 备用版本 ${suffix} 构建失败，跳过：${err.message}`);
+  }
+}
 
 const info = {
   ...runtimeInfo,
-  pow: { type: pow.type, machine: pow.machine, builtAt: new Date().toISOString() },
+  pow: {
+    type: pow.type,
+    machine: pow.machine,
+    builtAt: new Date().toISOString(),
+    variants: powVariants,
+  },
 };
 fs.writeFileSync(path.join(runtimeDir, 'runtime-info.json'), `${JSON.stringify(info, null, 2)}\n`);
 
@@ -51,6 +79,10 @@ fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(path.join(stage, 'web'), { recursive: true });
 copyDir(path.join(ROOT, 'app', 'src'), path.join(stage, 'src'));
 copyDir(path.join(ROOT, 'app', 'web', 'dist'), path.join(stage, 'web', 'dist'));
+// 内置控制台的「文档」页里写死了旧默认端口，构建时同步成 8765
+const webDist = path.join(stage, 'web', 'dist');
+replaceInTree(webDist, '8787', '8765');
+replaceInTree(webDist, '8465', '8765');
 for (const file of ['package.json', 'LICENSE', 'ANDROID.md']) {
   fs.copyFileSync(path.join(ROOT, 'app', file), path.join(stage, file));
 }
@@ -103,6 +135,21 @@ function parseArgs(argv) {
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) throw new Error(`缺少目录：${src}`);
   fs.cpSync(src, dest, { recursive: true, force: true });
+}
+
+function replaceInTree(dir, from, to) {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      replaceInTree(full, from, to);
+      continue;
+    }
+    if (!/\.(js|css|html|json|txt)$/i.test(entry.name)) continue;
+    const text = fs.readFileSync(full, 'utf8');
+    if (!text.includes(from)) continue;
+    fs.writeFileSync(full, text.split(from).join(to));
+  }
 }
 
 function zipDir(dir, out) {

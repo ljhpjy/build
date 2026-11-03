@@ -15,7 +15,7 @@ export default function Docs() {
         <DocSection>
           <dl className="kv">
             <dt>Base URL</dt>
-            <dd className="mono">http://127.0.0.1:8787</dd>
+            <dd className="mono">http://127.0.0.1:8765</dd>
             <dt>鉴权</dt>
             <dd>
               <code>Authorization: Bearer &lt;API_KEY&gt;</code> 或 <code>x-api-key: &lt;API_KEY&gt;</code>；没配置 API_KEY 时随便填
@@ -33,7 +33,7 @@ export default function Docs() {
       <Card title="OpenAI 调用">
         <DocSection title="curl（流式）">
           <CodeBlock
-            code={`curl -N http://127.0.0.1:8787/v1/chat/completions \\
+            code={`curl -N http://127.0.0.1:8765/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer any" \\
   -d '{
@@ -50,7 +50,7 @@ export default function Docs() {
           <CodeBlock
             code={`from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="any")
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="any")
 stream = client.chat.completions.create(
     model="deepseek-flash",
     messages=[{"role": "user", "content": "用一句话解释 QUIC"}],
@@ -62,7 +62,7 @@ for chunk in stream:
         </DocSection>
         <DocSection title="工具调用（tools）">
           <CodeBlock
-            code={`curl -N http://127.0.0.1:8787/v1/chat/completions \\
+            code={`curl -N http://127.0.0.1:8765/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "deepseek-flash",
@@ -83,7 +83,7 @@ for chunk in stream:
       <Card title="Anthropic 调用">
         <DocSection>
           <CodeBlock
-            code={`curl -s http://127.0.0.1:8787/v1/messages \\
+            code={`curl -s http://127.0.0.1:8765/v1/messages \\
   -H "Content-Type: application/json" \\
   -H "x-api-key: any" \\
   -H "anthropic-version: 2023-06-01" \\
@@ -98,7 +98,7 @@ for chunk in stream:
           <CodeBlock
             code={`from anthropic import Anthropic
 
-client = Anthropic(base_url="http://127.0.0.1:8787", api_key="any")
+client = Anthropic(base_url="http://127.0.0.1:8765", api_key="any")
 msg = client.messages.create(
     model="deepseek-flash",
     max_tokens=1024,

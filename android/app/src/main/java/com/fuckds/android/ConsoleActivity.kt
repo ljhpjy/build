@@ -19,7 +19,7 @@ import com.fuckds.android.databinding.ActivityConsoleBinding
 /** 用 WebView 装现有的 /admin 控制台：账号、设置、测试、日志、重启都在里面。 */
 class ConsoleActivity : AppCompatActivity() {
     private lateinit var binding: ActivityConsoleBinding
-    private var port = 8787
+    private var port = 8765
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

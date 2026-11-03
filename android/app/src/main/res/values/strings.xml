@@ -71,7 +71,7 @@
     <string name="ok">知道了</string>
 
     <string name="help">使用说明</string>
-    <string name="help_text">1. 打开应用就会自动启动本地服务，默认地址 http://127.0.0.1:8787\n\n2. 首次使用：服务启动后会自动弹出「配置登录态」向导；如果错过了，点主页「立即配置登录态」或右上角菜单 → 配置登录态，粘贴 userToken 保存即可（也可以在控制台「账号」页配置）\n\n3. OpenAI 客户端 base_url 填 http://127.0.0.1:8787/v1；Anthropic 客户端 base_url 填 http://127.0.0.1:8787\n\n4. 模型名填 deepseek-flash / deepseek-reasoner 等；API Key 可以填任意值（除非你在控制台设置里配了 API_KEY）\n\n5. 服务只监听 127.0.0.1，同一台手机上的应用可以访问；局域网其他设备访问不到\n\n6. browser 引擎需要桌面版 Chromium，APK 里没有；direct 引擎功能完整（图片、超长附件、工具调用、思考）</string>
+    <string name="help_text">1. 打开应用就会自动启动本地服务，默认地址 http://127.0.0.1:8765\n\n2. 首次使用：服务启动后会自动弹出「配置登录态」向导；如果错过了，点主页「立即配置登录态」或右上角菜单 → 配置登录态，粘贴 userToken 保存即可（也可以在控制台「账号」页配置）\n\n3. OpenAI 客户端 base_url 填 http://127.0.0.1:8765/v1；Anthropic 客户端 base_url 填 http://127.0.0.1:8765\n\n4. 模型名填 deepseek-flash / deepseek-reasoner 等；API Key 可以填任意值（除非你在控制台设置里配了 API_KEY）\n\n5. 服务只监听 127.0.0.1，同一台手机上的应用可以访问；局域网其他设备访问不到\n\n6. browser 引擎需要桌面版 Chromium，APK 里没有；direct 引擎功能完整（图片、超长附件、工具调用、思考）</string>
 
     <string name="console_title">fuckds 控制台</string>
     <string name="console_error">连不上 http://127.0.0.1:%1$d 上的服务。先确认服务已启动，再重试。</string>
