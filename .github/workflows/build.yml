@@ -60,7 +60,8 @@ jobs:
       - name: 安装 Go（交叉编译 PoW）
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          # 1.25+ 对 Android 16KB page / 新 bionic 的兼容性更好
+          go-version: '1.25.x'
           cache: false
 
       - name: 安装系统工具
