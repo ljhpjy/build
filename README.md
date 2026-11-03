@@ -111,6 +111,7 @@ DeepSeek `userToken` 即可使用。
   - `SIGNING_KEY_PASSWORD`
 
 构建机要求的工具链（workflow 里都装好了）：Node 22、Go 1.23+、JDK 17、Android SDK 35、
+Android NDK（x86_64 的 Go PIE 必须用 NDK clang 外部链接；arm64 通常内部链接即可）、
 `zip` / `xz` / `dpkg-deb` / `readelf`。
 
 ### 本地构建
@@ -128,6 +129,9 @@ gradle -p android :app:assembleArm64Release \
 ```
 
 模拟器用 `--abi x86_64` + `:app:assembleX64Release`。
+
+> x86_64 的 PoW 需要 NDK：设置 `ANDROID_NDK_HOME`，或把 NDK 装在 `$ANDROID_HOME/ndk/<version>`；
+> `tools/build-pow.mjs` 会自动找 NDK clang 做 cgo 外部链接。arm64 一般不需要 NDK。
 
 如果 `node tools/prepare.mjs` 卡在下载，可以手动换镜像：编辑
 [tools/termux-runtime.mjs](tools/termux-runtime.mjs) 顶部的 `REPOS` 顺序。
