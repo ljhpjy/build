@@ -1,0 +1,248 @@
+name: build-apk
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      refresh_termux:
+        description: '忽略缓存的 Termux 运行时，重新下载'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_VERSION: '8.10.2'
+  ANDROID_COMPILE_SDK: '35'
+  ANDROID_BUILD_TOOLS: '35.0.0'
+
+jobs:
+  build:
+    name: ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            flavor: Arm64
+            dir: arm64
+            goarch: arm64
+          - abi: x86_64
+            flavor: X64
+            dir: x64
+            goarch: amd64
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Node.js（只用于构建脚本）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装 Go（交叉编译 PoW）
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+
+      - name: 安装系统工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip unzip xz-utils dpkg binutils
+          sudo rm -rf /var/lib/apt/lists/*
+
+      - name: JS 冒烟测试（不依赖 Android 运行时）
+        run: |
+          set -euo pipefail
+          export FUCKDS_ANDROID=1
+          export POW_BIN=/bin/true
+          export HOST=127.0.0.1
+          export PORT=18787
+          export WARMUP=false
+          export LOG_LEVEL=warn
+          export DATA_DIR="$RUNNER_TEMP/fuckds-smoke"
+          rm -rf "$DATA_DIR"
+          mkdir -p "$DATA_DIR"
+          node app/src/index.mjs > /tmp/fuckds-smoke.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:18787/healthz" -o /tmp/fuckds-health.json; then
+              ok=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "服务没有启动，日志："
+            cat /tmp/fuckds-smoke.log
+            exit 1
+          fi
+          cat /tmp/fuckds-health.json
+          grep -q '"engine":"direct"' /tmp/fuckds-health.json
+          curl -fsS "http://127.0.0.1:18787/admin/" -o /tmp/fuckds-admin.html
+          grep -q 'fuckds 控制台' /tmp/fuckds-admin.html
+          curl -fsS "http://127.0.0.1:18787/admin/api/overview" -o /tmp/fuckds-overview.json
+          grep -q '"platform":"android"' /tmp/fuckds-overview.json
+          echo "✅ JS 冒烟测试通过"
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: 安装 Gradle
+        run: |
+          curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip"
+          unzip -q /tmp/gradle.zip -d "$HOME/gradle"
+          echo "$HOME/gradle/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: 计算版本号
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 计算本周编号（缓存 key）
+        id: week
+        run: echo "week=$(date +%Y-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/jdks
+            ~/.gradle/notices
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 缓存 Termux Node 运行时
+        uses: actions/cache@v4
+        with:
+          path: build/runtime/${{ matrix.abi }}
+          key: termux-${{ matrix.abi }}-${{ steps.week.outputs.week }}-${{ hashFiles('tools/termux-runtime.mjs', 'tools/elf.mjs') }}
+          restore-keys: |
+            termux-${{ matrix.abi }}-
+
+      - name: 准备 Node 运行时 / PoW / assets
+        run: |
+          if [ "${{ inputs.refresh_termux }}" = "true" ]; then
+            rm -rf "build/runtime/${{ matrix.abi }}"
+          fi
+          node tools/prepare.mjs --abi "${{ matrix.abi }}" --goarch "${{ matrix.goarch }}"
+
+      - name: 准备签名
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/signing
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > build/signing/release.jks
+            STORE="${STORE_PASSWORD:-fuckds123456}"
+            ALIAS="${KEY_ALIAS:-fuckds}"
+            KEYPASS="${KEY_PASSWORD:-$STORE}"
+            echo "使用仓库 Secrets 里的签名"
+          else
+            STORE="fuckds-$(openssl rand -hex 12)"
+            ALIAS="fuckds"
+            KEYPASS="$STORE"
+            keytool -genkeypair \
+              -keystore build/signing/release.jks \
+              -alias "$ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE" -keypass "$KEYPASS" \
+              -dname "CN=fuckds, OU=Android, O=fuckds, C=CN" > /dev/null
+            echo "使用临时生成的签名（不能覆盖升级）"
+          fi
+          {
+            echo "FUCKDS_STORE_FILE=$PWD/build/signing/release.jks"
+            echo "FUCKDS_STORE_PASSWORD=$STORE"
+            echo "FUCKDS_KEY_ALIAS=$ALIAS"
+            echo "FUCKDS_KEY_PASSWORD=$KEYPASS"
+          } >> "$GITHUB_ENV"
+
+      - name: 编译 APK
+        run: |
+          gradle -p android --no-daemon ":app:assemble${{ matrix.flavor }}Release" \
+            "-Pfuckds.versionCode=${GITHUB_RUN_NUMBER}" \
+            "-Pfuckds.versionName=${{ steps.version.outputs.name }}" \
+            "-Pfuckds.storeFile=$FUCKDS_STORE_FILE" \
+            "-Pfuckds.storePassword=$FUCKDS_STORE_PASSWORD" \
+            "-Pfuckds.keyAlias=$FUCKDS_KEY_ALIAS" \
+            "-Pfuckds.keyPassword=$FUCKDS_KEY_PASSWORD"
+
+      - name: 校验并重命名 APK
+        run: |
+          set -euo pipefail
+          APK=$(find "android/app/build/outputs/apk/${{ matrix.dir }}/release" -maxdepth 1 -name '*.apk' | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "没有找到 APK"
+            exit 1
+          fi
+          OUT="fuckds-${{ steps.version.outputs.name }}-${{ matrix.abi }}.apk"
+          cp "$APK" "$OUT"
+          BT="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}"
+          "$BT/apksigner" verify --print-certs "$OUT"
+          "$BT/aapt" dump badging "$OUT" | grep -E '^(package|sdkVersion|targetSdkVersion)' || true
+          unzip -l "$OUT" | grep -E 'assets/(runtime|fuckds)\.zip|assets/default\.env' || {
+            echo "APK 里缺少 assets，构建有问题"
+            exit 1
+          }
+          ls -lh "$OUT"
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuckds-apk-${{ matrix.abi }}
+          path: fuckds-${{ steps.version.outputs.name }}-${{ matrix.abi }}.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fuckds-apk-*
+          merge-multiple: true
+          path: dist
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true
