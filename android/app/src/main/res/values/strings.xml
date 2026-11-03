@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">fuckds</string>
+    <string name="app_subtitle">DeepSeek 网页版 → OpenAI / Anthropic API</string>
+
+    <string name="status_running">服务运行中</string>
+    <string name="status_stopped">服务未运行</string>
+    <string name="status_preparing">正在准备运行环境</string>
+    <string name="status_starting">正在启动服务</string>
+    <string name="status_error">服务出错</string>
+
+    <string name="start_service">启动服务</string>
+    <string name="stop_service">停止服务</string>
+    <string name="restart_service">重启</string>
+    <string name="open_console">打开控制台</string>
+    <string name="view_logs">查看日志</string>
+    <string name="copy_endpoint">复制接口地址</string>
+    <string name="copied">已复制到剪贴板</string>
+
+    <string name="token_card_title">还没有配置 DeepSeek 登录态</string>
+    <string name="token_card_body">点下面的「立即配置登录态」，把 chat.deepseek.com 的 userToken 粘进去，保存后会自动重启服务；也可以打开控制台 → 「账号」页配置。</string>
+
+    <string name="token_setup_title">配置 DeepSeek 登录态</string>
+    <string name="token_setup_subtitle">运行环境已经就绪，只差最后一步：填入你自己的 DeepSeek userToken。</string>
+    <string name="token_why">token 只保存在本机 App 私有目录，用来代表你登录 chat.deepseek.com；不会上传到任何第三方服务器。没有它，对话接口无法工作。</string>
+    <string name="token_step_title">怎么获取 userToken</string>
+    <string name="token_step_1">1. 用手机或电脑浏览器打开 chat.deepseek.com 并登录。</string>
+    <string name="token_step_2">2. 电脑上按 F12 → Application → Local Storage → https://chat.deepseek.com → 找到键 userToken；手机上登录后可以把值发给自己再复制。</string>
+    <string name="token_step_3">3. 复制它的 value（一长串字符）。整段 {\"value\":\"...\",\"__version\":\"0\"} 也可以直接粘贴。</string>
+    <string name="token_step_4">4. 回到这里粘贴，保存后服务会自动重启并加载登录态；是否有效可在控制台「账号」页点「校验」。</string>
+    <string name="token_hint">粘贴 userToken</string>
+    <string name="token_paste">从剪贴板粘贴</string>
+    <string name="token_existing_hint">已有 %1$d 个 token，保存会去重合并</string>
+    <string name="token_save">保存并重启服务</string>
+    <string name="token_skip">稍后配置（回主页可继续；未配置前接口不可用）</string>
+    <string name="token_saving">正在保存 token…</string>
+    <string name="token_restarting">已保存，正在重启服务…</string>
+    <string name="token_waiting">正在等待服务加载登录态…</string>
+    <string name="token_success">配置完成，服务已加载登录态</string>
+    <string name="token_done">完成</string>
+    <string name="token_timeout">token 已保存，但服务 60 秒内没有就绪；请回主页查看日志/状态</string>
+    <string name="token_save_failed">保存失败：%1$s</string>
+    <string name="token_restart_failed">保存成功，但重启服务失败：%1$s</string>
+    <string name="token_clipboard_empty">剪贴板里没有可用文本</string>
+    <string name="configure_now">立即配置登录态</string>
+    <string name="action_configure_token">配置登录态</string>
+
+    <string name="info_title">运行信息</string>
+    <string name="info_engine">引擎：%1$s · 忙碌 %2$d · 排队 %3$d</string>
+    <string name="info_token_ok">登录态：已配置</string>
+    <string name="info_token_missing">登录态：未配置</string>
+    <string name="info_accounts">号池：%1$d 个账号 · 可用 %2$d 个</string>
+    <string name="info_accounts_empty">号池：空</string>
+    <string name="info_runtime">Node %1$s · %2$s · App %3$s</string>
+    <string name="info_runtime_missing">运行时：尚未安装（首次启动会自动解压）</string>
+    <string name="tip_keep_alive">提示：在系统设置里关闭对本应用的电池优化，并保持「息屏保持运行」开启，才能让接口在后台稳定工作。</string>
+
+    <string name="notification_channel">本地 API 服务</string>
+    <string name="notification_channel_desc">显示 fuckds Node 服务的运行状态</string>
+
+    <string name="settings">设置</string>
+    <string name="setting_auto_start">开机自动启动</string>
+    <string name="setting_keep_awake">息屏保持运行（耗电会增加）</string>
+    <string name="setting_battery">忽略电池优化</string>
+    <string name="setting_port">监听端口（1–65535）</string>
+    <string name="port_invalid">端口不合法，请输入 1–65535</string>
+    <string name="battery_already">已经忽略电池优化</string>
+    <string name="battery_unavailable">无法打开电池优化设置，请到系统设置里手动允许</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="ok">知道了</string>
+
+    <string name="help">使用说明</string>
+    <string name="help_text">1. 打开应用就会自动启动本地服务，默认地址 http://127.0.0.1:8787\n\n2. 首次使用：服务启动后会自动弹出「配置登录态」向导；如果错过了，点主页「立即配置登录态」或右上角菜单 → 配置登录态，粘贴 userToken 保存即可（也可以在控制台「账号」页配置）\n\n3. OpenAI 客户端 base_url 填 http://127.0.0.1:8787/v1；Anthropic 客户端 base_url 填 http://127.0.0.1:8787\n\n4. 模型名填 deepseek-flash / deepseek-reasoner 等；API Key 可以填任意值（除非你在控制台设置里配了 API_KEY）\n\n5. 服务只监听 127.0.0.1，同一台手机上的应用可以访问；局域网其他设备访问不到\n\n6. browser 引擎需要桌面版 Chromium，APK 里没有；direct 引擎功能完整（图片、超长附件、工具调用、思考）</string>
+
+    <string name="console_title">fuckds 控制台</string>
+    <string name="console_error">连不上 http://127.0.0.1:%1$d 上的服务。先确认服务已启动，再重试。</string>
+    <string name="console_retry">重试</string>
+    <string name="console_start">启动服务并重试</string>
+    <string name="open_in_browser">用浏览器打开</string>
+    <string name="reload">刷新</string>
+
+    <string name="logs_title">服务日志</string>
+    <string name="logs_empty">还没有日志。服务启动后这里会显示 Node 的输出。</string>
+    <string name="refresh">刷新</string>
+    <string name="copy">复制</string>
+    <string name="share">分享</string>
+    <string name="log_copied">日志已复制</string>
+</resources>
