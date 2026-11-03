@@ -81,6 +81,8 @@ DeepSeek `userToken` 即可使用。
   闭包裁剪出 `bin/node` + `lib/*.so` + CA 证书，打进 `assets/runtime.zip`。不是自己交叉编译，
   所以版本新、和 Android/bionic ABI 完全匹配。
 - **PoW**：上游 `cmd/powd` 用 `GOOS=android` 交叉编译成 PIE，随运行时一起打包。
+  Android 构建默认加 `-tags=purego` 并在运行环境里设 `POW_NO_NEON=1`，不执行 ARMv8.2 SHA3 汇编
+  （部分 CPU/ROM 会因此 SIGILL）；同时用 NDK 外部链接显式做 16KB 页对齐。
 - **targetSdk = 28**：Android 10+ 会对 `targetSdk >= 29` 的应用禁止执行私有目录里的文件；
   Termux 至今保持 28 也是这个原因。这是刻意设置，**不要随手改高**。
 - **登录态向导**：环境健康、`/healthz` 可达但还没有 token 时，主页自动打开 `TokenSetupActivity`；
@@ -110,7 +112,7 @@ DeepSeek `userToken` 即可使用。
   - `SIGNING_KEY_ALIAS`
   - `SIGNING_KEY_PASSWORD`
 
-构建机要求的工具链（workflow 里都装好了）：Node 22、Go 1.23+、JDK 17、Android SDK 35、
+构建机要求的工具链（workflow 里都装好了）：Node 22、Go 1.25+、JDK 17、Android SDK 35、
 Android NDK（x86_64 的 Go PIE 必须用 NDK clang 外部链接；arm64 通常内部链接即可）、
 `zip` / `xz` / `dpkg-deb` / `readelf`。
 
@@ -168,6 +170,10 @@ Termux 只是运行时的来源，不是依赖。App 用普通应用权限运行
 A：必须。它是你的 DeepSeek 账号登录态，不能预置（否则等于公开账号）；没有 token 时服务和控制台
 仍能起来，但对话接口会报「未配置」。原生向导就是专门用来完成这一步的。
 
+**Q：新 APK 覆盖安装提示签名不一致？**
+A：CI 默认每次生成临时 keystore，签名会变。测试时先卸载旧版再装；长期使用请配置固定的
+`SIGNING_KEYSTORE_BASE64` 等 secrets，才能保留数据直接覆盖升级。
+
 **Q：APK 为什么几十 MB？**
 A：里面带了完整的 Node.js + ICU（约 100MB 解压后，压缩进 APK 约 30～50MB），以及 Go PoW。
 这是“不装 Termux 也能跑 Node”的代价。
@@ -175,6 +181,11 @@ A：里面带了完整的 Node.js + ICU（约 100MB 解压后，压缩进 APK �
 **Q：安装时提示 targetSdk 过低 / 应用为旧版 Android 构建？**
 A：`targetSdk 28` 是为了让 Node 可执行文件能在私有目录里跑（和 Termux 一样），不是漏改。
 Android 14/15 仍可正常安装；只有 Google Play 上架会拒绝，本项目不面向 Play。
+
+**Q：日志里出现「PoW 求解器退出（code null）」怎么办？**
+A：这是 PoW 子进程被信号杀掉，常见于 ARMv8.2 SHA3 汇编不被设备支持，或 16KB 页对齐问题。
+新构建已经默认纯 Go Keccak（`-tags=purego` + `POW_NO_NEON=1`）并做 16KB 对齐；如果仍出现，
+请把带 `signal` 和 `[ds-pow]` 的完整日志发出来，能直接判断是 SIGILL / SIGSEGV / SIGKILL。
 
 **Q：服务启动失败怎么办？**
 A：先看 App 里的「日志」页；常见原因：

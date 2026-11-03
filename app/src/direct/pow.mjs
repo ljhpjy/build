@@ -27,13 +27,24 @@ export class PowSolver {
     }
 
     this.proc = spawn(this.bin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.proc.on('exit', (code) => {
-      this.log?.warn(`PoW 求解器退出（code ${code}）`);
+    this.proc.on('exit', (code, signal) => {
+      this.log?.warn(`PoW 求解器退出（code ${code}, signal ${signal ?? 'none'}）`);
       this.proc = null;
       for (const { reject } of this.pending.values()) reject(new Error('PoW 求解器已退出'));
       this.pending.clear();
     });
-    this.proc.stderr.on('data', (chunk) => this.log?.debug(`[ds-pow] ${String(chunk).trim()}`));
+    // spawn 失败（ENOEXEC/EACCES 等）只发 error，不发 exit；不接住会把 Node 进程直接干掉
+    this.proc.on('error', (err) => {
+      this.log?.warn(`PoW 求解器启动失败：${err.message}`);
+      this.proc = null;
+      for (const { reject } of this.pending.values()) reject(err);
+      this.pending.clear();
+    });
+    this.proc.stderr.on('data', (chunk) => {
+      const text = String(chunk).trim();
+      // 变成 warn：ds-pow 的 fatal error / SIGILL traceback 都在 stderr，debug 级别会看不到
+      if (text) this.log?.warn(`[ds-pow] ${text}`);
+    });
 
     const rl = readline.createInterface({ input: this.proc.stdout });
     rl.on('line', (line) => {

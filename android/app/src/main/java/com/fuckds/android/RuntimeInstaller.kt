@@ -35,6 +35,8 @@ object RuntimeInstaller {
         val nodeVersion: String,
         val abi: String,
         val builtAt: String,
+        val powType: String = "",
+        val powMachine: String = "",
     )
 
     private const val INSTALL_PREFS = "fuckds-install"
@@ -177,10 +179,13 @@ object RuntimeInstaller {
             val file = File(context.filesDir, "fuckds/runtime/runtime-info.json")
             if (!file.isFile) return null
             val json = JSONObject(file.readText())
+            val pow = json.optJSONObject("pow")
             RuntimeInfo(
                 nodeVersion = json.optString("nodeVersion"),
                 abi = json.optString("abi"),
                 builtAt = json.optString("builtAt"),
+                powType = pow?.optString("type", "") ?: "",
+                powMachine = pow?.optString("machine", "") ?: "",
             )
         } catch (_: Throwable) {
             null

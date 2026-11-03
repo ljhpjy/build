@@ -135,6 +135,9 @@ class ServerService : Service() {
 
             ServerState.update(ServerPhase.STARTING, "正在自检 Node 运行时…", installed.port)
             verifyRuntime(installed)
+            RuntimeInstaller.readRuntimeInfo(this)?.let {
+                appendLog("PoW 运行时：${it.powType.ifBlank { "?" }} ${it.powMachine}（POW_NO_NEON=1）")
+            }
             if (!desiredRunning) return
 
             ServerState.update(ServerPhase.STARTING, "正在启动服务…", installed.port)
@@ -237,6 +240,9 @@ class ServerService : Service() {
         env["XDG_CACHE_HOME"] = installed.cacheDir.absolutePath
         env["FUCKDS_ANDROID"] = "1"
         env["POW_BIN"] = installed.powExe.absolutePath
+        // 部分 Android CPU/ROM 上 ARMv8.2 SHA3 汇编会触发 SIGILL。
+        // 纯 Go 版 Keccak 慢一点，但不会再碰硬件 SHA3 指令，稳定性优先。
+        env["POW_NO_NEON"] = "1"
         env["SSL_CERT_FILE"] = installed.certFile.absolutePath
         env["NODE_EXTRA_CA_CERTS"] = installed.certFile.absolutePath
         env["NO_COLOR"] = "1"
@@ -367,34 +373,67 @@ class ServerService : Service() {
 
     /**
      * 应用进程被系统杀掉时，Node 子进程可能变成孤儿并继续占着端口。
-     * 启动前按 pid 文件找到它（先确认 cmdline 是我们自己的 node），结束掉再启动。
+     * 旧版本没有 server.pid，且每次重启都可能留下多个孤儿，所以这里除了 pid 文件，
+     * 还直接扫描 /proc 找所有本项目的 Node 进程（同一个 UID 才能读到 cmdline）。
      */
     private fun cleanupStaleNode() {
         val pidFile = nodePidFile()
-        if (!pidFile.isFile) return
-        val pid = pidFile.readText().trim().toIntOrNull()
+        val recordedPid = if (pidFile.isFile) pidFile.readText().trim().toIntOrNull() else null
         pidFile.delete()
-        if (pid == null || pid <= 0 || pid == android.os.Process.myPid()) return
 
-        val cmdline = try {
-            File("/proc/$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
-        } catch (_: Throwable) {
-            return
+        val rootPaths = listOf(
+            File(filesDir, "fuckds").absolutePath,
+            "/data/data/$packageName/files/fuckds",
+        )
+        val candidates = linkedSetOf<Int>()
+        if (recordedPid != null && recordedPid > 0 && recordedPid != android.os.Process.myPid()) {
+            candidates.add(recordedPid)
         }
-        if (!cmdline.contains("/fuckds/runtime/bin/node")) return
 
-        appendLog("发现上次残留的 Node 进程（pid $pid），先结束它")
+        for (entry in File("/proc").listFiles() ?: emptyArray<File>()) {
+            val pid = entry.name.toIntOrNull() ?: continue
+            if (pid == android.os.Process.myPid()) continue
+            val cmdline = readCmdline(pid) ?: continue
+            if (rootPaths.none { cmdline.contains(it) }) continue
+            if (!cmdline.contains("/runtime/bin/node")) continue
+            if (!cmdline.contains("/src/index.mjs")) continue
+            candidates.add(pid)
+        }
+
+        val victims = candidates.filter { isOurNode(it, rootPaths) }
+        if (victims.isEmpty()) return
+
+        for (pid in victims) {
+            appendLog("发现残留的 Node 进程（pid $pid），先结束它")
+            killPid(pid, "TERM")
+        }
+        Thread.sleep(700)
+        for (pid in victims) {
+            if (File("/proc/$pid").exists() && isOurNode(pid, rootPaths)) {
+                killPid(pid, "KILL")
+                Thread.sleep(150)
+            }
+        }
+    }
+
+    private fun readCmdline(pid: Int): String? = try {
+        File("/proc/$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun isOurNode(pid: Int, rootPaths: List<String>): Boolean {
+        val cmdline = readCmdline(pid) ?: return false
+        return rootPaths.any { cmdline.contains(it) } &&
+            cmdline.contains("/runtime/bin/node") &&
+            cmdline.contains("/src/index.mjs")
+    }
+
+    private fun killPid(pid: Int, signal: String) {
         try {
-            ProcessBuilder("/system/bin/sh", "-c", "kill -TERM $pid")
+            ProcessBuilder("/system/bin/sh", "-c", "kill -$signal $pid")
                 .start()
                 .waitFor(3, TimeUnit.SECONDS)
-            Thread.sleep(700)
-            if (File("/proc/$pid").exists()) {
-                ProcessBuilder("/system/bin/sh", "-c", "kill -KILL $pid")
-                    .start()
-                    .waitFor(3, TimeUnit.SECONDS)
-                Thread.sleep(300)
-            }
         } catch (_: Throwable) {
             /* ignore */
         }

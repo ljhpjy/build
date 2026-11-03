@@ -2,16 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { readElf } from './elf.mjs';
+import { loadAligns, readElf } from './elf.mjs';
 
 /**
  * 把 Go 版 PoW 求解器（cmd/powd）交叉编译成 Android 的 PIE 可执行文件。
  *
- * 注意：Go 的 -buildmode=pie 在 android/amd64 上必须走 cgo 外部链接；
- * arm64 通常可以内部链接。这里按顺序尝试：
- *   1. 内部链接 PIE（不需要 NDK）
- *   2. 如果找到 Android NDK，用 NDK clang 做 cgo 外部链接 PIE
+ * 注意：Go 的 -buildmode=pie 在 android/amd64 上必须走 cgo 外部链接。这里按顺序尝试：
+ *   1. NDK clang 外部链接 PIE（同时显式 16KB 页对齐）
+ *   2. Go 内部链接 PIE（没有 NDK 时）
  *   3. 最后兜底静态 exe（非 PIE，极少数环境可能拒绝执行）
+ *
+ * 另外 Android 构建固定 -tags=purego，不链接 ARMv8.2 SHA3 汇编，避免部分设备 SIGILL。
  */
 export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
   const srcDir = path.join(projectRoot, 'app', 'pow-src');
@@ -26,23 +27,34 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
     ...process.env,
     GOOS: 'android',
     GOARCH: goarch,
+    // 锁在 ARMv8.0 基线，避免 Go runtime 自己使用 LSE/SHA3 等扩展指令
+    GOARM64: 'v8.0',
     GOTOOLCHAIN: 'auto',
   };
   const ldflags = '-s -w';
-  const pieArgs = ['build', '-trimpath', '-buildmode=pie', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
-  const exeArgs = ['build', '-trimpath', '-buildmode=exe', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
+  // 关键：Android 上直接编纯 Go 版（不链接 ARMv8.2 SHA3 汇编）。
+  // 部分 CPU/ROM 会在执行 sha3 指令时 SIGILL，纯 Go 慢一点但稳定。
+  const pieArgs = ['build', '-trimpath', '-tags=purego', '-buildmode=pie', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
+  const exeArgs = ['build', '-trimpath', '-tags=purego', '-buildmode=exe', `-ldflags=${ldflags}`, '-o', outFile, './cmd/powd'];
 
-  const attempts = [{ label: 'PIE（Go 内部链接）', env: { CGO_ENABLED: '0' }, args: pieArgs }];
+  const attempts = [];
 
+  // 优先用 NDK clang 做外部链接：
+  // - android/amd64 的 PIE 必须外部链接
+  // - 显式指定 16KB 页对齐，兼容 Android 15+ 的 16KB 页设备
   const ndk = findNdk();
   if (ndk) {
     const clang = findClang(ndk, goarch);
     if (clang) {
       const cxx = clang.replace(/-clang$/, '-clang++');
-      const env = { CGO_ENABLED: '1', CC: clang };
+      const env = {
+        CGO_ENABLED: '1',
+        CC: clang,
+        CGO_LDFLAGS: '-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384',
+      };
       if (fs.existsSync(cxx)) env.CXX = cxx;
       attempts.push({
-        label: `PIE（NDK ${path.basename(ndk)} 外部链接）`,
+        label: `PIE（NDK ${path.basename(ndk)} 外部链接，16KB 对齐）`,
         env,
         args: pieArgs,
       });
@@ -50,9 +62,10 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
       log(`⚠️  找到 NDK ${ndk}，但没有 ${goarch} 对应的 clang`);
     }
   } else {
-    log('⚠️  没有找到 Android NDK；x86_64 的 PIE 需要它（会尝试静态 exe 兜底）');
+    log('⚠️  没有找到 Android NDK；会尝试 Go 内部 PIE / 静态 exe 兜底');
   }
 
+  attempts.push({ label: 'PIE（Go 内部链接）', env: { CGO_ENABLED: '0' }, args: pieArgs });
   attempts.push({ label: '静态 exe（非 PIE 兜底）', env: { CGO_ENABLED: '0' }, args: exeArgs });
 
   let built = false;
@@ -90,7 +103,20 @@ export function buildPow({ projectRoot, goarch, outFile, log = console.log }) {
   if (info.type !== 'DYN') {
     log(`⚠️  ds-pow 不是 PIE（Type=${info.type}）。Android 5+ 可能拒绝执行，请检查 NDK/Go 工具链。`);
   }
-  log(`✅ ds-pow：${info.type} ${info.machine}（${(fs.statSync(outFile).size / 1024 / 1024).toFixed(1)} MB）`);
+
+  let minAlign = 0;
+  try {
+    const aligns = loadAligns(outFile);
+    if (aligns.length) minAlign = Math.min(...aligns);
+  } catch (err) {
+    log(`⚠️  读取 LOAD 对齐失败：${err.message}`);
+  }
+  if (minAlign && minAlign < 0x4000) {
+    log(`⚠️  ds-pow 的 LOAD 对齐是 0x${minAlign.toString(16)}，Android 16KB 页设备可能无法运行`);
+  }
+  log(
+    `✅ ds-pow：${info.type} ${info.machine}，LOAD align=${minAlign ? `0x${minAlign.toString(16)}` : '?'}（${(fs.statSync(outFile).size / 1024 / 1024).toFixed(1)} MB）`,
+  );
   return info;
 }
 
