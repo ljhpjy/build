@@ -107,6 +107,14 @@ jobs:
 
       - name: 安装 Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # 不要用 action 的默认值 "tools platform-tools"：
+          # Google 已从 SDK 仓库移除旧的 tools 包，安装它会报
+          #   Warning: Failed to find package 'tools'
+          #   sdkmanager failed with exit code 1
+          packages: platform-tools
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
       - name: 安装 SDK 组件
         run: |
