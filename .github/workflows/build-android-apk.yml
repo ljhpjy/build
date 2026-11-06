@@ -61,13 +61,24 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK components
+      - name: Setup Android SDK（runner 预装 SDK，兜底自动下载）
         run: |
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "未找到预装 SDK，下载 cmdline-tools…"
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/clt.zip -d "$SDK/cmdline-tools"
+            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          # 接受全部许可证（新许可证逐年增加，yes 全收）
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          # 安装/确认构建所需组件（已安装则直接跳过）
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          ls -d "$SDK/build-tools/34.0.0" "$SDK/platforms/android-34" && echo "SDK OK"
 
       - name: Setup QEMU + Buildx
         uses: docker/setup-buildx-action@v3
