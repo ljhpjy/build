@@ -170,6 +170,8 @@ public class BootService extends Service {
         env.put("TMPDIR", "/tmp");
         env.put("PATH", "/usr/local/node/bin:/usr/bin:/bin");
         env.put("TZ", TimeZone.getDefault().getID());
+        // Termux 版 proot 是 bionic 动态链接，若需要配套 .so 就从 payload 目录找（无害）
+        env.put("LD_LIBRARY_PATH", linux.getAbsolutePath());
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(new File(logDir, "container.log")));
         proc = pb.start();

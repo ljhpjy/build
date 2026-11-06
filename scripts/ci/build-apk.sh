@@ -53,13 +53,58 @@ bash scripts/ci/make-app-tarball.sh
 log "构建 payload-rootfs.tar.gz（docker/arm64，耗时较长）"
 bash scripts/ci/build-rootfs.sh
 
-# 5. 下载 proot 静态二进制（aarch64）
-log "下载 proot（aarch64 静态）"
+# 5. 下载 proot（aarch64，三路自动回退）
+log "下载 proot（aarch64）"
 mkdir -p android-shell/app/src/main/assets/payload
-curl -fL "$PROOT_URL" -o android-shell/app/src/main/assets/payload/proot \
-  || curl -fL "https://github.com/proot-me/proot-static-build/releases/latest/download/proot-v5.4.0-aarch64-static" \
-       -o android-shell/app/src/main/assets/payload/proot
-chmod +x android-shell/app/src/main/assets/payload/proot
+PROOT_DEST=android-shell/app/src/main/assets/payload/proot
+PROOT_SRC=""
+try_fetch() {  # try_fetch <url>
+  if curl -fsSL --connect-timeout 30 "$1" -o "$PROOT_DEST.dl" 2>/dev/null; then
+    PROOT_SRC="$1"
+    mv -f "$PROOT_DEST.dl" "$PROOT_DEST"
+  else
+    rm -f "$PROOT_DEST.dl"
+  fi
+}
+# 5.1 GitHub 最新 release：动态找 aarch64 static 资产（优先非 tar 包）
+GH_JSON=$(curl -fsSL --connect-timeout 30 \
+  "https://api.github.com/repos/proot-me/proot-static-build/releases/latest" 2>/dev/null || true)
+ASSET_URL=$(printf '%s' "$GH_JSON" | tr ',' '\n' \
+  | sed -n 's/.*"browser_download_url": *"\([^"]*aarch64[^"]*static[^"]*\)".*/\1/p' \
+  | grep -v '\.tar\.' | head -1)
+[ -n "$ASSET_URL" ] && try_fetch "$ASSET_URL"
+# 5.2 固定 URL 猜测（老版本兼容）
+[ -z "$PROOT_SRC" ] && try_fetch "${PROOT_URL}"
+[ -z "$PROOT_SRC" ] && try_fetch "https://github.com/proot-me/proot-static-build/releases/latest/download/proot-v5.4.0-aarch64-static"
+# 5.3 Termux 官方仓库：按 Packages 索引定位 deb，解包出 proot（bionic 链接，同样可在应用目录执行）
+if [ -z "$PROOT_SRC" ]; then
+  log "GitHub 无可用资产，改用 Termux 仓库的 proot"
+  DEB_NAME=$(curl -fsSL --connect-timeout 30 \
+    "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages" 2>/dev/null \
+    | awk '/^Package: proot$/{f=1} f && /^Filename:/{print $2; exit}')
+  if [ -n "$DEB_NAME" ]; then
+    curl -fsSL --connect-timeout 60 "https://packages.termux.dev/apt/termux-main/${DEB_NAME}" -o /tmp/proot.deb
+    TMPD=$(mktemp -d)
+    ( cd "$TMPD" && ar x /tmp/proot.deb data.tar.xz \
+      && tar -xJf data.tar.xz ./data/data/com.termux/files/usr/bin/proot )
+    cp "$TMPD/data/data/com.termux/files/usr/bin/proot" "$PROOT_DEST"
+    rm -rf "$TMPD" /tmp/proot.deb
+    PROOT_SRC="termux:${DEB_NAME}"
+  fi
+fi
+if [ -z "$PROOT_SRC" ]; then
+  echo "错误：无法下载 proot（GitHub/termux 均失败），请检查网络或更换 URL" >&2
+  exit 1
+fi
+# 校验下载物是 ELF（防止拿到 HTML 错误页）
+MAGIC=$(od -An -tx1 -N4 "$PROOT_DEST" | tr -d ' \n')
+if [ "$MAGIC" != "7f454c46" ]; then
+  echo "错误：proot 文件不是 ELF（MAGIC=$MAGIC，来源=$PROOT_SRC）" >&2
+  exit 1
+fi
+chmod +x "$PROOT_DEST"
+ls -l "$PROOT_DEST"
+echo "proot 来源: $PROOT_SRC"
 
 # 6. payload 放进 APK assets
 log "拷贝 payload 到 assets"
