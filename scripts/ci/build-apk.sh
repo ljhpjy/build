@@ -21,11 +21,22 @@ done
 
 # 1. 服务端 + 前端依赖
 #    服务端 playwright 是纯 JS，npm ci 即可（跳过浏览器下载，浏览器在 rootfs 里装）；
-#    前端 vite 8 基于 rolldown，带平台原生绑定：锁文件若在其它平台生成，
-#    npm ci 会漏装当前平台的可选依赖（npm/cli#4828），必须用 npm install 按平台解析。
+#    前端 vite 8 基于 rolldown，带平台原生绑定。仓库里的 web/package-lock.json 生成于
+#    其它平台，带旧锁文件时 npm ci/install 都会漏装当前平台绑定（npm/cli#4828）——
+#    只能在 CI 工作区里删掉锁文件重新生成（不提交，不影响仓库）。
 log "安装 Node 依赖（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1）"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
-npm --prefix web install --no-audit --no-fund
+
+log "安装前端依赖（重建锁文件以适配当前平台原生绑定）"
+(
+  cd web
+  rm -rf node_modules package-lock.json
+  npm install --no-audit --no-fund
+  # 兜底：显式补装当前平台的 rolldown 原生绑定（版本与已安装的 rolldown 一致）
+  BINDING_VERSION="$(node -p "require('./node_modules/rolldown/package.json').version")"
+  npm install --save-dev --no-audit --no-fund "@rolldown/binding-linux-x64-gnu@${BINDING_VERSION}" || true
+)
+
 log "构建前端 web/dist"
 npm --prefix web run build
 
