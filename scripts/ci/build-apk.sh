@@ -33,7 +33,7 @@ log "安装前端依赖（重建锁文件以适配当前平台原生绑定）"
   rm -rf node_modules package-lock.json
   npm install --no-audit --no-fund
   # 兜底：显式补装当前平台的 rolldown 原生绑定（版本与已安装的 rolldown 一致）
-  BINDING_VERSION="$(node -p "require('./node_modules/rolldown/package.json').version")"
+  BINDING_VERSION="$(node -p "require('./node_modules/rolldown/package.json').version" || true)"
   npm install --save-dev --no-audit --no-fund "@rolldown/binding-linux-x64-gnu@${BINDING_VERSION}" || true
 )
 
@@ -69,9 +69,10 @@ try_fetch() {  # try_fetch <url>
 # 5.1 GitHub 最新 release：动态找 aarch64 static 资产（优先非 tar 包）
 GH_JSON=$(curl -fsSL --connect-timeout 30 \
   "https://api.github.com/repos/proot-me/proot-static-build/releases/latest" 2>/dev/null || true)
+# 注意：grep -v 无匹配时退出码为 1，配合 set -e/pipefail 会静默崩脚本，必须 || true
 ASSET_URL=$(printf '%s' "$GH_JSON" | tr ',' '\n' \
   | sed -n 's/.*"browser_download_url": *"\([^"]*aarch64[^"]*static[^"]*\)".*/\1/p' \
-  | grep -v '\.tar\.' | head -1)
+  | grep -v '\.tar\.' | head -1 || true)
 [ -n "$ASSET_URL" ] && try_fetch "$ASSET_URL"
 # 5.2 固定 URL 猜测（老版本兼容）
 [ -z "$PROOT_SRC" ] && try_fetch "${PROOT_URL}"
@@ -81,15 +82,18 @@ if [ -z "$PROOT_SRC" ]; then
   log "GitHub 无可用资产，改用 Termux 仓库的 proot"
   DEB_NAME=$(curl -fsSL --connect-timeout 30 \
     "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages" 2>/dev/null \
-    | awk '/^Package: proot$/{f=1} f && /^Filename:/{print $2; exit}')
+    | awk '/^Package: proot$/{f=1} f && /^Filename:/{print $2; exit}' || true)
   if [ -n "$DEB_NAME" ]; then
     curl -fsSL --connect-timeout 60 "https://packages.termux.dev/apt/termux-main/${DEB_NAME}" -o /tmp/proot.deb
     TMPD=$(mktemp -d)
-    ( cd "$TMPD" && ar x /tmp/proot.deb data.tar.xz \
-      && tar -xJf data.tar.xz ./data/data/com.termux/files/usr/bin/proot )
-    cp "$TMPD/data/data/com.termux/files/usr/bin/proot" "$PROOT_DEST"
+    if ( cd "$TMPD" && ar x /tmp/proot.deb data.tar.xz \
+         && tar -xJf data.tar.xz ./data/data/com.termux/files/usr/bin/proot ); then
+      cp "$TMPD/data/data/com.termux/files/usr/bin/proot" "$PROOT_DEST"
+      PROOT_SRC="termux:${DEB_NAME}"
+    else
+      echo "警告：proot deb 解包失败（${DEB_NAME}）" >&2
+    fi
     rm -rf "$TMPD" /tmp/proot.deb
-    PROOT_SRC="termux:${DEB_NAME}"
   fi
 fi
 if [ -z "$PROOT_SRC" ]; then
@@ -131,4 +135,5 @@ fi
 log "签名 APK"
 bash scripts/ci/sign-apk.sh
 
-log "完成：$(ls -1 fuckds-android-*.apk 2>/dev/null | tail -1)"
+APK_LIST="$(ls -1 fuckds-android-*.apk 2>/dev/null || true)"
+log "完成：$(printf '%s\n' "$APK_LIST" | tail -1)"
