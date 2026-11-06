@@ -19,10 +19,13 @@ for c in node npm go docker keytool gradle; do
   command -v "$c" >/dev/null 2>&1 || { echo "缺少命令: $c"; exit 1; }
 done
 
-# 1. 服务端 + 前端依赖（纯 JS，跨架构通用；跳过浏览器下载，浏览器在 rootfs 里装）
+# 1. 服务端 + 前端依赖
+#    服务端 playwright 是纯 JS，npm ci 即可（跳过浏览器下载，浏览器在 rootfs 里装）；
+#    前端 vite 8 基于 rolldown，带平台原生绑定：锁文件若在其它平台生成，
+#    npm ci 会漏装当前平台的可选依赖（npm/cli#4828），必须用 npm install 按平台解析。
 log "安装 Node 依赖（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1）"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
-npm --prefix web ci
+npm --prefix web install --no-audit --no-fund
 log "构建前端 web/dist"
 npm --prefix web run build
 
