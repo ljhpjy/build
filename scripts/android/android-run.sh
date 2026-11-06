@@ -11,6 +11,13 @@ export LC_ALL=C.UTF-8
 export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1
 
 cd /opt/fuckds
+
+# 兜底：docker export 不含容器的 bind mount，rootfs 里可能没有 /etc/resolv.conf；
+# 正常路径下这里已被 proot -b 绑定成宿主的文件（有内容则跳过）。
+if [ ! -s /etc/resolv.conf ]; then
+  printf 'nameserver 223.5.5.5\nnameserver 8.8.8.8\n' > /etc/resolv.conf 2>/dev/null || true
+fi
+
 mkdir -p data logs
 
 {

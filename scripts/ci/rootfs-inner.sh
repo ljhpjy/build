@@ -30,10 +30,11 @@ mv /opt/ms-playwright/chromium-*/chrome-linux/* /opt/chromium/
 ls -lh /opt/chromium/chrome
 /opt/chromium/chrome --version 2>&1 | head -1 || true
 
-# 固化 resolv.conf 为普通文件（Android 侧会通过 proot -b 绑定真实的进去；
-# 保持普通文件而不是符号链接，避免绑定被链接目标绕开）
-rm -f /etc/resolv.conf
-echo -e "nameserver 223.5.5.5\nnameserver 8.8.8.8" > /etc/resolv.conf
+# /etc/resolv.conf 在运行中的容器里是 Docker 的 bind mount：rm 会 EBUSY，
+# 且 bind mount 内容不会进入 docker export。这里只尽力覆盖（非致命）；
+# 手机运行时由 BootService 通过 proot -b 绑定真实 resolv.conf，
+# android-run.sh 里另有兜底写入。
+echo -e "nameserver 223.5.5.5\nnameserver 8.8.8.8" > /etc/resolv.conf 2>/dev/null || true
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
