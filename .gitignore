@@ -1,18 +1,10 @@
-# 构建产物
-build/
-.tmp/
-android/**/build/
-android/.gradle/
-android/local.properties
-
-# 生成的 assets / jniLibs
-android/app/src/arm64/assets/
-android/app/src/x64/assets/
-
-# 本地环境
-.env
-*.jks
-*.keystore
-*.log
 node_modules/
+web/node_modules/
+web/dist/
+data/
+.env
+*.log
+*.bak
+test/.artifacts/
+bin/
 .DS_Store

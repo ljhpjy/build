@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.fuckds.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.fuckds.app'
+        minSdk 24
+        // targetSdk 28：允许从应用私有目录 exec() 自带的 proot/node 二进制
+        // （Android 10+ 对 targetSdk>=29 的应用禁止执行应用数据目录里的文件）
+        targetSdk 28
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // tar.gz 和 proot 不再被 aapt2 二次压缩（本来就压过/是二进制）
+    androidResources {
+        noCompress += ['tar.gz', 'proot']
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
