@@ -15,7 +15,7 @@ SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
 
 log() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
 
-for c in node npm go docker keytool gradle; do
+for c in node npm go docker keytool gradle zip; do
   command -v "$c" >/dev/null 2>&1 || { echo "缺少命令: $c"; exit 1; }
 done
 
@@ -55,8 +55,9 @@ bash scripts/ci/build-rootfs.sh
 
 # 5. 下载 proot（aarch64，三路自动回退）
 log "下载 proot（aarch64）"
-mkdir -p android-shell/app/src/main/assets/payload
-PROOT_DEST=android-shell/app/src/main/assets/payload/proot
+rm -rf payload-staging
+mkdir -p payload-staging/payload
+PROOT_DEST=payload-staging/payload/proot
 PROOT_SRC=""
 try_fetch() {  # try_fetch <url>
   if curl -fsSL --connect-timeout 30 "$1" -o "$PROOT_DEST.dl" 2>/dev/null; then
@@ -110,10 +111,12 @@ chmod +x "$PROOT_DEST"
 ls -l "$PROOT_DEST"
 echo "proot 来源: $PROOT_SRC"
 
-# 6. payload 放进 APK assets
-log "拷贝 payload 到 assets"
-cp app.tar.gz android-shell/app/src/main/assets/payload/app.tar.gz
-cp payload-rootfs.tar.gz android-shell/app/src/main/assets/payload/rootfs.tar.gz
+# 6. payload 暂存：构建完成后以 STORE 方式直接注入 APK，
+#    避免 aapt2 在压缩阶段把 500MB 大文件读进内存导致 Java heap space
+log "暂存 payload（构建后注入）"
+cp app.tar.gz payload-staging/payload/app.tar.gz
+cp payload-rootfs.tar.gz payload-staging/payload/rootfs.tar.gz
+ls -lh payload-staging/payload
 
 # 7. 签名证书（首次自动生成；GitHub Actions 会用 cache 持久化，保证覆盖安装）
 if [ ! -f android-shell/fuckds-release.jks ]; then
@@ -124,9 +127,15 @@ if [ ! -f android-shell/fuckds-release.jks ]; then
     -dname "CN=fuckds, OU=android, O=fuckds, L=NA, ST=NA, C=CN"
 fi
 
-# 8. Gradle 构建 APK
+# 8. Gradle 构建 APK（此时 APK 里只有小体积壳资源）
 log "Gradle assembleRelease"
 (cd android-shell && gradle --no-daemon --console=plain assembleRelease)
+
+# 8.5 注入大 payload：STORE 不压缩；APK 尚未签名/对齐，可安全修改
+log "注入 payload 到 APK（STORE，不压缩）"
+( cd payload-staging \
+  && zip -0 -X ../android-shell/app/build/outputs/apk/release/app-release-unsigned.apk \
+       payload/proot payload/rootfs.tar.gz payload/app.tar.gz )
 
 # 9. zipalign + apksigner
 if [ -n "$SDK" ] && [ -d "$SDK/build-tools/34.0.0" ]; then

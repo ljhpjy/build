@@ -32,10 +32,9 @@ android {
         buildConfig true
     }
 
-    // tar.gz 和 proot 不再被 aapt2 二次压缩（本来就压过/是二进制）
-    androidResources {
-        noCompress += ['tar.gz', 'proot']
-    }
+    // 大体积 payload（rootfs.tar.gz / app.tar.gz / proot）不走 assets：
+    // 由 scripts/ci/build-apk.sh 在 Gradle 构建完成后以 STORE 方式直接注入 APK，
+    // 避免 aapt2 压缩阶段把 500MB 文件读进内存导致 Java heap space。
 
     lint {
         abortOnError false
