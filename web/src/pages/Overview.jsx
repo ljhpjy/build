@@ -21,6 +21,7 @@ export default function Overview({ navigate }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [restarting, setRestarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -81,6 +82,24 @@ export default function Overview({ navigate }) {
     }
   };
 
+  const stop = async () => {
+    const ok = await askConfirm(
+      '停止后网页控制台会断开；重新启动请到 Termux 执行 ./fuckds up。',
+      '停止服务',
+      '停止',
+    );
+    if (!ok) return;
+    setStopping(true);
+    try {
+      await adminApi('/stop', { method: 'POST' });
+      toast('已发出停止指令，服务即将断开');
+    } catch (err) {
+      await notify(err.message, '停止失败');
+    } finally {
+      setStopping(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="page">
@@ -114,6 +133,9 @@ export default function Overview({ navigate }) {
         <div className="page-actions">
           <Btn variant="tonal" icon="refresh" onClick={load}>
             刷新
+          </Btn>
+          <Btn variant="outlined" icon="stop_circle" loading={stopping} onClick={stop}>
+            停止服务
           </Btn>
           <Btn variant="filled" icon="restart_alt" loading={restarting} onClick={restart}>
             重启服务

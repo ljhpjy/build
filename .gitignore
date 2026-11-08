@@ -7,4 +7,5 @@ data/
 *.bak
 test/.artifacts/
 bin/
+dist/
 .DS_Store

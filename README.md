@@ -92,7 +92,7 @@ npm run down      # 停止
 > npm run admin:build     # 构建到 web/dist，服务会自动托管
 > ```
 >
-> 状态、号池 token、登录态校验、测试请求、日志、配置、重启都能在页面里点。
+> 状态、号池 token、登录态校验、测试请求、日志、配置、停止/重启都能在页面里点。
 > 如果配置了 `API_KEY`，打开 `/admin` 会弹框要求输入同一个 key（存在浏览器 localStorage，右上角钥匙图标可修改 / 清除）。
 > 开发前端时用 `npm run admin:dev`（Vite 会热更新并把 /admin/api、/v1 代理到 8787）。
 
@@ -451,6 +451,7 @@ npm run auth -- --list      # 查看号池（token 打码）
 | `GET /admin/api/config` · `PUT /admin/api/config` | 读 / 写项目根目录 `.env`（重启后生效） |
 | `GET /admin/api/logs?lines=300` | 读 `data/server.log` 尾部 |
 | `POST /admin/api/restart` | 调 `server-ctl restart` 重启服务 |
+| `POST /admin/api/stop` | 调 `server-ctl down` 停止服务（网页会断开；重新启动用 `./fuckds up`） |
 
 > 静态页面本身公开，`/admin/api/*` 才鉴权。浏览器端在首次 401 时弹出输入框，
 > key 保存在 localStorage（`fuckds-admin-api-key`），右上角钥匙图标可修改 / 清除。

@@ -1,0 +1,303 @@
+#!/system/bin/sh
+# fuckds · Termux 原生启动器
+#
+# 自带 runtime/bin/node（Termux aarch64 官方 Node 运行时），不依赖 Termux 的 node/npm；
+# browser 引擎使用 Termux 官方 Chromium（pkg install chromium），direct 引擎使用 bin/ds-pow。
+# 整个目录必须放在 Termux HOME 下（/sdcard 是 noexec，不能直接运行）。
+set -eu
+
+SELF=$0
+case "$SELF" in
+  */*) ROOT=$(CDPATH= cd "${SELF%/*}" && pwd) ;;
+  *)   ROOT=$(pwd) ;;
+esac
+
+PREFIX=${PREFIX:-/data/data/com.termux/files/usr}
+NODE="$ROOT/runtime/bin/node"
+
+# install 要在 Node 检查之前处理：解压目录里 node 可能还没有执行位，
+# 安装器会复制到 HOME 后再 chmod/test。
+if [ "${1:-}" = "install" ]; then
+  shift
+  INSTALLER="$ROOT/install-termux.sh"
+  [ -f "$INSTALLER" ] || INSTALLER="$ROOT/scripts/termux/install-termux.sh"
+  if [ ! -f "$INSTALLER" ]; then
+    echo "❌ 找不到安装器：$ROOT/install-termux.sh" >&2
+    exit 1
+  fi
+  exec bash "$INSTALLER" "$@"
+fi
+
+# 读 .env 里的一个键（只用于“用户是否显式配置了”的判断；真正的解析仍由 Node 做）。
+dotenv_value() {
+  key=$1
+  [ -f "$ROOT/.env" ] || return 0
+  sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$ROOT/.env" 2>/dev/null \
+    | tail -n 1 | tr -d '\r' \
+    | sed -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+}
+
+if [ ! -x "$NODE" ]; then
+  echo "❌ 找不到 Node 运行时：$NODE" >&2
+  echo "   请用 Termux 的 tar 解包（不要在 /sdcard 上直接运行），然后执行：bash install-termux.sh" >&2
+  exit 1
+fi
+
+export FUCKDS_HOME="$ROOT"
+export LD_LIBRARY_PATH="$ROOT/runtime/lib:$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="$ROOT/bin:$ROOT/runtime/bin:${PATH:-/system/bin}"
+export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1
+export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
+mkdir -p "$TMPDIR" "$ROOT/data" 2>/dev/null || true
+cd "$ROOT"
+
+if [ -d "$ROOT/runtime/lib/ossl-modules" ]; then
+  export OPENSSL_MODULES="$ROOT/runtime/lib/ossl-modules"
+fi
+
+# 某些 Termux libicu 构建把 icudt*.dat 放在 share/icu；有就指给 ICU。
+if [ -d "$ROOT/runtime/share/icu" ]; then
+  ICUDT=""
+  for f in "$ROOT/runtime/share/icu"/*/icudt*.dat "$ROOT/runtime/share/icu"/icudt*.dat; do
+    if [ -f "$f" ]; then
+      ICUDT=$f
+      break
+    fi
+  done
+  if [ -n "$ICUDT" ]; then
+    export ICU_DATA="${ICUDT%/*}"
+  fi
+fi
+
+if [ -f "$ROOT/runtime/etc/tls/cert.pem" ]; then
+  export SSL_CERT_FILE="$ROOT/runtime/etc/tls/cert.pem"
+fi
+
+# Termux 官方 Chromium 的位置因版本略有差异，逐个探测。
+# 找到后生成一个 wrapper：把 Node 运行时的 runtime/lib 从 LD_LIBRARY_PATH 里摘掉，
+# 避免用我们打包时的 libc++/libicu 去覆盖用户刚安装的 Chromium 依赖。
+CHROMIUM_REAL=""
+if [ -z "${CHROMIUM_EXECUTABLE:-}" ]; then
+  ENV_CHROMIUM=$(dotenv_value CHROMIUM_EXECUTABLE || true)
+  if [ -n "$ENV_CHROMIUM" ]; then
+    CHROMIUM_EXECUTABLE=$ENV_CHROMIUM
+    export CHROMIUM_EXECUTABLE
+  fi
+fi
+
+if [ -z "${CHROMIUM_EXECUTABLE:-}" ]; then
+  for candidate in \
+    "$PREFIX/bin/chromium" \
+    "$PREFIX/bin/chromium-browser" \
+    "$PREFIX/lib/chromium/chromium" \
+    "$PREFIX/lib/chromium/chrome" \
+    "$PREFIX/opt/chromium/chrome"
+  do
+    if [ -x "$candidate" ]; then
+      CHROMIUM_REAL=$candidate
+      break
+    fi
+  done
+fi
+
+if [ -n "$CHROMIUM_REAL" ]; then
+  CHROMIUM_WRAPPER="$ROOT/data/chromium-launch.sh"
+  if cat > "$CHROMIUM_WRAPPER" <<EOF
+#!/system/bin/sh
+set -eu
+PREFIX='$PREFIX'
+REAL='$CHROMIUM_REAL'
+# 这些是给 Node 运行时用的，Chromium 有自己的 ICU/OpenSSL，不能混用
+unset ICU_DATA OPENSSL_MODULES SSL_CERT_FILE 2>/dev/null || true
+OLD=\${LD_LIBRARY_PATH:-}
+NEW=
+OLDIFS=\$IFS
+IFS=:
+for p in \$OLD; do
+  case "\$p" in
+    */runtime/lib) continue ;;
+  esac
+  [ -n "\$p" ] || continue
+  NEW="\$NEW:\$p"
+done
+IFS=\$OLDIFS
+NEW=\${NEW#:}
+export LD_LIBRARY_PATH="\$PREFIX/lib\${NEW:+:\$NEW}"
+exec "\$REAL" "\$@"
+EOF
+  then
+    chmod 755 "$CHROMIUM_WRAPPER" 2>/dev/null || true
+    CHROMIUM_EXECUTABLE=$CHROMIUM_WRAPPER
+  else
+    CHROMIUM_EXECUTABLE=$CHROMIUM_REAL
+  fi
+  export CHROMIUM_EXECUTABLE
+fi
+
+# 只有完全没有 .env 时才补 Termux 默认开关；有 .env 就以 .env 为准（后台改配置不会被启动器覆盖）。
+if [ ! -f "$ROOT/.env" ] && [ -z "${BROWSER_ARGS:-}" ]; then
+  export BROWSER_ARGS="--no-zygote --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-infobars"
+fi
+
+usage() {
+  cat <<'EOF'
+fuckds · Termux 原生包（自带 Node 运行时）
+用法：
+  ./fuckds up              后台启动（日志 data/server.log）
+  ./fuckds down            停止
+  ./fuckds restart         重启
+  ./fuckds status          查看状态 / 引擎 / 号池
+  ./fuckds auth <token>    保存 DeepSeek userToken（可多个，空格分隔）
+  ./fuckds auth --list     查看号池
+  ./fuckds auth --check    校验第一个 token
+  ./fuckds serve           前台启动
+  ./fuckds smoke           端到端自检（会真的访问 DeepSeek）
+  ./fuckds doctor          检查 Node / ds-pow / Chromium / 配置
+  ./fuckds test            跑项目测试
+  ./fuckds logs [-f]       查看/跟踪 data/server.log
+  ./fuckds web             打印并打开 /admin 控制台
+  ./fuckds version         打印版本
+  ./fuckds install         安装到 ~/fuckds（--with-chromium --token ... --start）
+  ./fuckds uninstall       卸载项目（--yes --purge-packages 连 Chromium 一起）
+  ./fuckds help            显示本帮助
+EOF
+}
+
+CMD=${1:-status}
+if [ $# -gt 0 ]; then
+  shift
+fi
+
+case "$CMD" in
+  up|start)
+    if command -v termux-wake-lock >/dev/null 2>&1; then
+      termux-wake-lock >/dev/null 2>&1 || true
+    fi
+    exec "$NODE" "$ROOT/scripts/server-ctl.mjs" up
+    ;;
+  down|stop)
+    if command -v termux-wake-unlock >/dev/null 2>&1; then
+      termux-wake-unlock >/dev/null 2>&1 || true
+    fi
+    exec "$NODE" "$ROOT/scripts/server-ctl.mjs" down
+    ;;
+  restart)
+    if command -v termux-wake-lock >/dev/null 2>&1; then
+      termux-wake-lock >/dev/null 2>&1 || true
+    fi
+    exec "$NODE" "$ROOT/scripts/server-ctl.mjs" restart
+    ;;
+  status)
+    exec "$NODE" "$ROOT/scripts/server-ctl.mjs" status
+    ;;
+  auth)
+    exec "$NODE" "$ROOT/scripts/auth.mjs" "$@"
+    ;;
+  smoke)
+    exec "$NODE" "$ROOT/scripts/smoke.mjs" "$@"
+    ;;
+  serve|foreground)
+    exec "$NODE" "$ROOT/src/index.mjs" "$@"
+    ;;
+  test)
+    cd "$ROOT"
+    exec "$NODE" --test --test-concurrency=1 'test/**/*.test.mjs'
+    ;;
+  logs)
+    LOG="$ROOT/data/server.log"
+    if [ ! -f "$LOG" ]; then
+      echo "还没有日志：$LOG（先 ./fuckds up）" >&2
+      exit 1
+    fi
+    LINES=200
+    FOLLOW=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--follow) FOLLOW=1; shift ;;
+        -n|--lines)
+          if [ $# -lt 2 ]; then
+            echo "用法：./fuckds logs [-f] [-n 200]" >&2
+            exit 2
+          fi
+          LINES=$2
+          shift 2
+          ;;
+        *[!0-9]*)
+          echo "用法：./fuckds logs [-f] [-n 200]" >&2
+          exit 2
+          ;;
+        *)
+          LINES=$1
+          shift
+          ;;
+      esac
+    done
+    if [ "$FOLLOW" = 1 ]; then
+      exec tail -n "$LINES" -f "$LOG"
+    fi
+    exec tail -n "$LINES" "$LOG"
+    ;;
+  web|admin|open)
+    HOST=$(dotenv_value HOST || true)
+    PORT=$(dotenv_value PORT || true)
+    [ -n "$HOST" ] || HOST=127.0.0.1
+    [ -n "$PORT" ] || PORT=8787
+    [ "$HOST" = "0.0.0.0" ] && HOST=127.0.0.1
+    URL="http://$HOST:$PORT/admin/"
+    echo "$URL"
+    if command -v termux-open-url >/dev/null 2>&1; then
+      termux-open-url "$URL" >/dev/null 2>&1 || true
+    fi
+    ;;
+  version|--version|-v)
+    exec "$NODE" -e 'console.log(require(process.argv[1] + "/package.json").version)' "$ROOT"
+    ;;
+  doctor)
+    echo "== fuckds doctor =="
+    echo "root:        $ROOT"
+    echo "termux:      $PREFIX"
+    printf 'node:        '
+    if V=$("$NODE" -v 2>&1); then echo "$V"; else echo "FAIL ($V)"; fi
+    printf 'playwright:  '
+    if P=$("$NODE" -e 'console.log(require("playwright/package.json").version)' 2>&1); then echo "$P"; else echo "FAIL ($P)"; fi
+    printf 'ds-pow:      '
+    if [ -x "$ROOT/bin/ds-pow" ]; then
+      if command -v file >/dev/null 2>&1; then file "$ROOT/bin/ds-pow"; else ls -l "$ROOT/bin/ds-pow"; fi
+      printf '              '
+      if "$ROOT/bin/ds-pow" </dev/null >/dev/null 2>&1; then echo "可执行"; else echo "启动失败"; fi
+    else
+      echo "缺失：$ROOT/bin/ds-pow"
+    fi
+    printf 'chromium:    '
+    if [ -n "${CHROMIUM_EXECUTABLE:-}" ]; then
+      echo "$CHROMIUM_EXECUTABLE"
+      "$CHROMIUM_EXECUTABLE" --version 2>&1 | head -n 1 || true
+    else
+      echo "未安装（browser 引擎需要：pkg install chromium）"
+    fi
+    echo "engine:      ${ENGINE:-(见 .env)}"
+    echo "data:        $ROOT/data"
+    if [ -f "$ROOT/.env" ]; then echo ".env:        $ROOT/.env"; else echo ".env:        缺失（cp .env.example .env）"; fi
+    ;;
+  uninstall)
+    U="$ROOT/uninstall-termux.sh"
+    [ -f "$U" ] || U="$ROOT/scripts/termux/uninstall-termux.sh"
+    if [ ! -f "$U" ]; then
+      echo "❌ 找不到卸载脚本：$ROOT/uninstall-termux.sh" >&2
+      exit 1
+    fi
+    TMPU="${TMPDIR:-$PREFIX/tmp}/fuckds-uninstall.$$.sh"
+    if cp "$U" "$TMPU" 2>/dev/null; then
+      chmod 755 "$TMPU" 2>/dev/null || true
+      exec "$TMPU" --target "$ROOT" "$@"
+    fi
+    exec "$U" --target "$ROOT" "$@"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

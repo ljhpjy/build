@@ -22,6 +22,24 @@ import { modelsResponse } from '../openai/response.mjs';
  */
 
 /** 允许在后台里修改的配置项（写回 .env，重启后生效） */
+// 重启/停止时要从旧进程环境里清掉的配置键：让新进程重新读当前 .env，
+// 包括用户已经从 .env 删除的键，避免旧值继续残留。
+const CONFIG_ENV_KEYS = new Set([
+  'ENGINE', 'POW_BIN', 'POW_WORKERS', 'POW_NO_NEON', 'DATA_DIR',
+  'DEEPSEEK_BASE_URL', 'DEEPSEEK_THINKING', 'DEEPSEEK_SEARCH', 'DEEPSEEK_MANAGE_TOGGLES',
+  'DEFAULT_MODEL', 'DEEPSEEK_DEVICE_PROFILE', 'DEEPSEEK_COLD_START', 'DEEPSEEK_HUMAN_TIMING',
+  'DEEPSEEK_USER_TOKEN', 'DEEPSEEK_USER_TOKENS',
+  'HOST', 'PORT', 'API_KEY', 'CORS_ORIGIN', 'LOG_LEVEL',
+  'BROWSER_HEADLESS', 'CHROMIUM_EXECUTABLE', 'CHROMIUM_DEPS_DIR', 'BROWSER_USER_AGENT',
+  'BROWSER_WIDTH', 'BROWSER_HEIGHT', 'BROWSER_LOCALE', 'BROWSER_SLOW_MO', 'BROWSER_ARGS',
+  'BROWSER_NAV_TIMEOUT_MS', 'CONCURRENCY', 'QUEUE_LIMIT', 'REQUEST_TIMEOUT_MS',
+  'FIRST_TOKEN_TIMEOUT_MS', 'POLL_INTERVAL_MS', 'SETTLE_MS', 'SEND_INTERVAL_MS',
+  'DIRECT_SEND_INTERVAL_MS', 'ACCOUNT_COOLDOWN_MS', 'MAX_COOLDOWN_WAIT_MS',
+  'REASONING_HOLD_MS', 'RATE_LIMIT_BACKOFF_MS', 'IDLE_SHUTDOWN_MS', 'WARMUP',
+  'SAVE_ARTIFACTS', 'MAX_PROMPT_CHARS', 'MAX_ATTACHMENT_CHARS', 'OVERFLOW_TO_ATTACHMENT',
+  'BROWSER_CAPTURE', 'BROWSER_CAPTURE_WAIT_MS',
+]);
+
 const ENV_SCHEMA = [
   { key: 'ENGINE', label: '引擎', type: 'select', options: ['direct', 'auto', 'browser'], help: 'direct 直连最快；browser 用 Playwright 驱动真实网页' },
   { key: 'DEEPSEEK_THINKING', label: '深度思考', type: 'select', options: ['always', 'auto', 'never'], help: 'always 默认打开；请求里传 thinking:false 可单次关闭' },
@@ -149,6 +167,10 @@ export function createAdminHandler({ config, logger, web }) {
 
     if (route === 'POST /admin/api/restart') {
       return sendJson(res, 200, await restartServer());
+    }
+
+    if (route === 'POST /admin/api/stop') {
+      return sendJson(res, 200, stopServer());
     }
 
     throw new ApiError(404, `未知接口: ${route}`, { code: 'not_found' });
@@ -469,17 +491,67 @@ export function createAdminHandler({ config, logger, web }) {
     if (!fs.existsSync(ctlScript)) {
       throw new ApiError(500, `找不到重启脚本：${ctlScript}`);
     }
-    const child = spawn(process.execPath, [ctlScript, 'restart'], {
+    // 优先走项目根目录的 fuckds 启动器：它会重新读 .env、重建 Chromium wrapper，
+    // 再 exec server-ctl，保证网页重启也能刷新启动器环境。
+    const launcher = path.join(rootDir, 'fuckds');
+    let useLauncher = false;
+    try {
+      fs.accessSync(launcher, fs.constants.X_OK);
+      useLauncher = true;
+    } catch {
+      /* 没有可执行启动器就回退 server-ctl */
+    }
+    // 清掉启动器上一次导出的项，也清掉旧进程从 .env 读进来的键，
+    // 让新的 launcher / Node 重新读取当前 .env。
+    const env = { ...process.env };
+    for (const key of CONFIG_ENV_KEYS) delete env[key];
+    for (const key of Object.keys(readEnvFile())) delete env[key];
+    delete env.CHROMIUM_EXECUTABLE;
+    delete env.BROWSER_ARGS;
+    const child = spawn(useLauncher ? launcher : process.execPath, useLauncher ? ['restart'] : [ctlScript, 'restart'], {
       cwd: rootDir,
       detached: true,
       stdio: 'ignore',
-      env: process.env,
+      env,
     });
     child.unref();
     log.info('收到后台重启请求，已交给 server-ctl restart', { pid: child.pid });
     return {
       ok: true,
       message: '正在重启服务，页面会自动重连…',
+      pid: child.pid,
+    };
+  }
+
+  function stopServer() {
+    if (!fs.existsSync(ctlScript)) {
+      throw new ApiError(500, `找不到停止脚本：${ctlScript}`);
+    }
+    // 走启动器的 down：会顺手释放 termux-wake-lock，再停服务。
+    const launcher = path.join(rootDir, 'fuckds');
+    let useLauncher = false;
+    try {
+      fs.accessSync(launcher, fs.constants.X_OK);
+      useLauncher = true;
+    } catch {
+      /* 没有可执行启动器就回退 server-ctl */
+    }
+    const env = { ...process.env };
+    for (const key of CONFIG_ENV_KEYS) delete env[key];
+    for (const key of Object.keys(readEnvFile())) delete env[key];
+    delete env.CHROMIUM_EXECUTABLE;
+    delete env.BROWSER_ARGS;
+    const child = spawn(useLauncher ? launcher : process.execPath, useLauncher ? ['down'] : [ctlScript, 'down'], {
+      cwd: rootDir,
+      detached: true,
+      stdio: 'ignore',
+      env,
+    });
+    child.unref();
+    log.info('收到后台停止请求，已交给 server-ctl down', { pid: child.pid });
+    return {
+      ok: true,
+      message: '正在停止服务，网页即将断开；重新启动请在 Termux 执行 ./fuckds up',
       pid: child.pid,
     };
   }
