@@ -53,12 +53,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node.js (CI 构建/测试)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
           cache: npm
@@ -67,7 +67,7 @@ jobs:
             web/package-lock.json
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -122,8 +122,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/ds-pow ./cmd/powd
           file bin/ds-pow
 
-      - name: Node tests (non-blocking)
-        continue-on-error: true
+      - name: Node tests
         timeout-minutes: 20
         run: npm test
 

@@ -3,6 +3,11 @@ import crypto from 'node:crypto';
 import { estimateTokens } from '../util.mjs';
 
 export const MODELS = [
+  { id: 'deepseek-flash', object: 'model', created: 0, owned_by: 'deepseek-web' },
+  { id: 'deepseek-v3', object: 'model', created: 0, owned_by: 'deepseek-web' },
+  { id: 'deepseek-web', object: 'model', created: 0, owned_by: 'deepseek-web' },
+  { id: 'deepseek-reasoner', object: 'model', created: 0, owned_by: 'deepseek-web' },
+  { id: 'deepseek-r1', object: 'model', created: 0, owned_by: 'deepseek-web' },
   { id: 'deepseek-v4.1-flash-1017', object: 'model', created: 0, owned_by: 'deepseek-web' },
 ];
 
