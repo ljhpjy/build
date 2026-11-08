@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -16,12 +17,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Map;
 import java.util.TimeZone;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * 前台服务：把 APK 里打包的完整 Linux 环境（Ubuntu rootfs + Node + Chromium）
- * 解压到应用私有目录，再用 proot 启动 fuckds 服务（browser / direct 双引擎完整版）。
+ * 参考 IDAdroid 架构重写的后台服务：
+ *   - proot 二进制来自 APK 小 asset（首次复制，chmod）
+ *   - rootfs 由主界面导入（filesDir/linux/rootfs），不再内嵌大 payload
+ *   - 端口冲突自动随机换端口重试（最多 10 次），healthz 探活通过才报“运行中”
+ *   - 状态写入 SharedPreferences，主界面实时展示
  */
 public class BootService extends Service {
 
@@ -67,91 +74,107 @@ public class BootService extends Service {
     private void run() {
         stopping = false;
         acquireWakeLock();
+        setStatus("正在准备运行环境…");
         try {
-            updateNotification("正在解压运行环境（仅首次，需几分钟）…", true);
-            File base = preparePayload();
+            updateNotification("正在准备运行环境…", true);
+            File base = new File(getFilesDir(), "linux");
+            File rootfs = new File(base, "rootfs");
 
-            updateNotification("正在启动 DeepSeek 代理服务…", true);
-            spawn(base);
+            if (!new File(base, ".rootfs-ready").exists()) {
+                String msg = "还没有导入 rootfs，请回主界面点「1. 导入 fuckds-rootfs.tar.xz」";
+                updateNotification(msg, false);
+                setStatus(msg);
+            } else {
+                ensureProot(base);
+                // 用户在配置页手动指定了端口时不注入 PORT 环境变量，
+                // 服务会读 .env 里的 PORT；否则走自动模式（默认 18787 + 冲突随机重试）
+                int manualPort = prefs().getInt("port_manual", 0);
+                int port = manualPort > 0 ? manualPort : prefs().getInt("port", 18787);
+                int attempts = 0;
+                while (true) {
+                    String s = "正在启动 DeepSeek 代理服务…（端口 " + port + "）";
+                    updateNotification(s, true);
+                    setStatus(s);
+                    spawn(base, port, manualPort);
 
-            updateNotification("服务运行中 · 127.0.0.1:8787 · 点击打开控制台", false);
-            int code = proc.waitFor();
-            updateNotification("服务已停止（退出码 " + code + "）", false);
+                    if (waitForServer(port, 45)) {
+                        prefs().edit().putInt("port", port).apply();
+                        s = "服务运行中 · http://127.0.0.1:" + port + " · 点通知或主界面打开控制台";
+                        updateNotification(s, false);
+                        setStatus(s);
+                        int code = proc.waitFor();
+                        s = "服务已停止（退出码 " + code + "）";
+                        updateNotification(s, false);
+                        setStatus(s);
+                        break;
+                    }
+
+                    if (!isAlive(proc)) {
+                        // 进程已退出且未监听 → 大概率端口冲突
+                        proc.destroy();
+                        proc = null;
+                        if (manualPort > 0) {
+                            s = "启动失败：指定端口 " + port + " 不可用（被占用？），请回配置页换一个端口";
+                            updateNotification(s, false);
+                            setStatus(s);
+                            break;
+                        }
+                        attempts++;
+                        if (attempts >= 10) {
+                            s = "启动失败：连续 10 次端口冲突，请关闭占用端口的其它本地服务后重试";
+                            updateNotification(s, false);
+                            setStatus(s);
+                            break;
+                        }
+                        port = 20000 + ThreadLocalRandom.current().nextInt(20000);
+                        continue;
+                    }
+
+                    proc.destroy();
+                    proc = null;
+                    String s = "启动失败：服务监听超时（45 秒），请查看日志";
+                    updateNotification(s, false);
+                    setStatus(s);
+                    break;
+                }
+            }
         } catch (Exception e) {
-            updateNotification("启动失败：" + shortMessage(e), false);
+            String msg = "启动失败：" + shortMessage(e);
+            updateNotification(msg, false);
+            setStatus(msg);
         } finally {
             stopping = true;
             if (proc != null) {
                 proc.destroy();
             }
             releaseWakeLock();
-            stopForeground(true);
+            stopForeground(false);   // 保留通知，让错误/退出码可读
             stopSelf();
         }
     }
 
-    /** 首次安装解压 assets，之后带版本标记直接复用；升级时保留 data/（token）与 .env */
-    private File preparePayload() throws IOException {
-        File linux = new File(getFilesDir(), "linux");
-        File app = new File(linux, "app");
-        File marker = new File(linux, ".payload-version-" + BuildConfig.VERSION_CODE);
-        if (marker.exists()) {
-            return linux;
+    private void ensureProot(File base) throws IOException {
+        File proot = new File(base, "proot");
+        if (!proot.exists() || proot.length() < 1000) {
+            try (InputStream is = getAssets().open("payload/proot");
+                 FileOutputStream os = new FileOutputStream(proot)) {
+                copy(is, os);
+            }
+            chmodX(proot);
         }
-
-        File backup = new File(getCacheDir(), "userdata-backup");
-        deleteRecursively(backup);
-        backup.mkdirs();
-        if (linux.exists()) {
-            move(new File(app, "data"), new File(backup, "data"));
-            move(new File(app, ".env"), new File(backup, ".env"));
-            deleteRecursively(linux);
-        }
-        linux.mkdirs();
-
-        updateNotification("正在解压 Linux 环境（约 5~10 分钟，仅首次）…", true);
-        try (InputStream is = getAssets().open("payload/rootfs.tar.gz")) {
-            TarGz.extract(is, new File(linux, "rootfs"));
-        }
-
-        updateNotification("正在解压应用文件…", true);
-        try (InputStream is = getAssets().open("payload/app.tar.gz")) {
-            TarGz.extract(is, new File(linux, "app"));
-        }
-
-        File proot = new File(linux, "proot");
-        try (InputStream is = getAssets().open("payload/proot");
-             FileOutputStream os = new FileOutputStream(proot)) {
-            copy(is, os);
-        }
-
-        chmodX(proot);
-        chmodX(new File(linux, "app/android-run.sh"));
-        chmodX(new File(linux, "app/bin/ds-pow"));
-        chmodX(new File(linux, "rootfs/opt/chromium/chrome"));
-        chmodX(new File(linux, "rootfs/usr/local/node/bin/node"));
-
-        if (backup.exists()) {
-            move(new File(backup, "data"), new File(app, "data"));
-            move(new File(backup, ".env"), new File(app, ".env"));
-        }
-        marker.createNewFile();
-        return linux;
     }
 
-    private void spawn(File linux) throws IOException {
-        File app = new File(linux, "app");
-        File proot = new File(linux, "proot");
-        File rootfs = new File(linux, "rootfs");
+    private void spawn(File base, int port, int manualPort) throws IOException {
+        File rootfs = new File(base, "rootfs");
+        File proot = new File(base, "proot");
 
-        // proot 里的 glibc 解析 DNS 需要一个常规 resolv.conf，从宿主文件绑定进去
-        File resolv = new File(linux, "resolv.conf");
+        File resolv = new File(base, "resolv.conf");
         try (FileOutputStream os = new FileOutputStream(resolv)) {
             os.write("nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\n"
                     .getBytes("UTF-8"));
         }
 
-        File logDir = new File(app, "logs");
+        File logDir = new File(base, "logs");
         logDir.mkdirs();
 
         ProcessBuilder pb = new ProcessBuilder(
@@ -160,7 +183,11 @@ public class BootService extends Service {
                 "-b", "/dev",
                 "-b", "/proc",
                 "-b", "/sys",
-                "-b", app.getAbsolutePath() + ":/opt/fuckds",
+                // 合并 usr 的关键目录（个别 ROM 限制 symlink，bind 兜底）
+                "-b", rootfs.getAbsolutePath() + "/usr/bin:/bin",
+                "-b", rootfs.getAbsolutePath() + "/usr/sbin:/sbin",
+                "-b", rootfs.getAbsolutePath() + "/usr/lib:/lib",
+                "-b", rootfs.getAbsolutePath() + "/usr/lib64:/lib64",
                 "-b", resolv.getAbsolutePath() + ":/etc/resolv.conf",
                 "-w", "/opt/fuckds",
                 "/bin/sh", "/opt/fuckds/android-run.sh"
@@ -170,11 +197,50 @@ public class BootService extends Service {
         env.put("TMPDIR", "/tmp");
         env.put("PATH", "/usr/local/node/bin:/usr/bin:/bin");
         env.put("TZ", TimeZone.getDefault().getID());
-        // Termux 版 proot 是 bionic 动态链接，若需要配套 .so 就从 payload 目录找（无害）
-        env.put("LD_LIBRARY_PATH", linux.getAbsolutePath());
+        env.put("LD_LIBRARY_PATH", base.getAbsolutePath());
+        if (manualPort <= 0) {
+            // 自动模式：注入端口（冲突时由本服务换端口重试）；
+            // 手动模式不注入，让服务读 .env 里的 PORT，保证用户配置生效
+            env.put("PORT", String.valueOf(port));
+        }
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.appendTo(new File(logDir, "container.log")));
         proc = pb.start();
+    }
+
+    /** 轮询 /healthz 直到服务真正就绪（最长 seconds 秒） */
+    private boolean waitForServer(int port, int seconds) {
+        for (int i = 0; i < seconds; i++) {
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/healthz")
+                        .openConnection();
+                conn.setConnectTimeout(800);
+                conn.setReadTimeout(800);
+                if (conn.getResponseCode() == 200) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAlive(Process p) {
+        try {
+            p.exitValue();
+            return false;
+        } catch (IllegalThreadStateException e) {
+            return true;
+        }
     }
 
     /* ------------------------- 生命周期辅助 ------------------------- */
@@ -238,6 +304,14 @@ public class BootService extends Service {
         nm.notify(NOTIF_ID, buildNotification(text, indeterminate));
     }
 
+    private void setStatus(String text) {
+        prefs().edit().putString("status", text).apply();
+    }
+
+    private SharedPreferences prefs() {
+        return getSharedPreferences("fuckds", 0);
+    }
+
     private void acquireWakeLock() {
         try {
             if (wakeLock == null) {
@@ -276,38 +350,6 @@ public class BootService extends Service {
             f.setExecutable(true, false);
             f.setReadable(true, false);
         }
-    }
-
-    private static void move(File src, File dst) {
-        if (src == null || !src.exists()) {
-            return;
-        }
-        if (dst.exists()) {
-            deleteRecursively(dst);
-        }
-        File parent = dst.getParentFile();
-        if (parent != null) {
-            parent.mkdirs();
-        }
-        if (!src.renameTo(dst)) {
-            deleteRecursively(src);
-        }
-    }
-
-    private static void deleteRecursively(File f) {
-        if (f == null || !f.exists()) {
-            return;
-        }
-        if (f.isDirectory() && !java.nio.file.Files.isSymbolicLink(f.toPath())) {
-            File[] kids = f.listFiles();
-            if (kids != null) {
-                for (File k : kids) {
-                    deleteRecursively(k);
-                }
-            }
-        }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
     }
 
     private static String shortMessage(Throwable e) {

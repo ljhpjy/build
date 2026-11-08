@@ -97,12 +97,14 @@ jobs:
           path: android-shell/fuckds-release.jks
           key: fuckds-keystore-v1
 
-      - name: Build APK（依赖 → ds-pow → app.tar.gz → rootfs → gradle → 签名）
+      - name: Build APK + rootfs（依赖 → ds-pow → rootfs.tar.xz → gradle → 签名）
         run: bash scripts/ci/build-apk.sh
 
-      - name: Upload APK
+      - name: Upload APK + rootfs
         uses: actions/upload-artifact@v4
         with:
-          name: fuckds-android-apk
-          path: '*.apk'
+          name: fuckds-android
+          path: |
+            *.apk
+            fuckds-rootfs.tar.xz
           retention-days: 30

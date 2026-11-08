@@ -123,13 +123,28 @@ public final class TarGz {
                         applyMode(header, out, true);
                         break;
 
-                    case '2': { // 符号链接
+                    case '2': { // 符号链接：容错处理（重复 tar 条目 / ROM 限制 symlink 均不阻断解压）
                         out.getParentFile().mkdirs();
-                        if (!out.exists()) {
+                        boolean isLink = false;
+                        if (out.exists()) {
+                            try {
+                                isLink = !out.getAbsolutePath().equals(out.getCanonicalPath());
+                            } catch (IOException ignored) {
+                            }
+                        }
+                        if (!isLink) {
                             try {
                                 Os.symlink(linkName, out.getAbsolutePath());
                             } catch (ErrnoException e) {
-                                throw new IOException("symlink " + full + " -> " + linkName, e);
+                                // 常见于重复 tar 条目（EEXIST）：删占位重试一次；
+                                // 再失败则忽略——关键目录（bin/sbin/lib/lib64）由
+                                // BootService 的 proot -b 绑定兜底。
+                                //noinspection ResultOfMethodCallIgnored
+                                out.delete();
+                                try {
+                                    Os.symlink(linkName, out.getAbsolutePath());
+                                } catch (ErrnoException ignored) {
+                                }
                             }
                         }
                         skipFully(gz, dataLen);

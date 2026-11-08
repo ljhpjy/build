@@ -28,6 +28,13 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    packagingOptions {
+        // commons-compress 自带 LICENSE/META-INF 重复文件，排除掉避免构建冲突
+        resources {
+            excludes += ['META-INF/LICENSE.txt', 'META-INF/NOTICE.txt', 'META-INF/DEPENDENCIES']
+        }
+    }
+
     buildFeatures {
         buildConfig true
     }
@@ -40,4 +47,10 @@ android {
         abortOnError false
         checkReleaseBuilds false
     }
+}
+
+dependencies {
+    // 参考 IDAdroid：纯 Java 解 xz 与 tar，带进度、符号链接与权限支持
+    implementation 'org.tukaani:xz:1.9'
+    implementation 'org.apache.commons:commons-compress:1.26.1'
 }

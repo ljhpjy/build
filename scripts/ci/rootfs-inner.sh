@@ -30,6 +30,23 @@ mv /opt/ms-playwright/chromium-*/chrome-linux/* /opt/chromium/
 ls -lh /opt/chromium/chrome
 /opt/chromium/chrome --version 2>&1 | head -1 || true
 
+# 把 fuckds 完整项目安装进 /opt/fuckds（App 导入 rootfs 后直接可用）
+echo "==> 安装 fuckds 项目到 /opt/fuckds"
+mkdir -p /opt/fuckds/bin
+tar cf - -C /work \
+  --exclude='.git' --exclude='node_modules' --exclude='web/node_modules' \
+  --exclude='web/dist' --exclude='test' --exclude='fuckds.zip' \
+  --exclude='android-shell' --exclude='.github' --exclude='bin' \
+  --exclude='*.apk' --exclude='*.xz' --exclude='*.log' --exclude='data' \
+  . | tar xf - -C /opt/fuckds
+cp -a /work/node_modules /opt/fuckds/node_modules
+cp -a /work/web/dist /opt/fuckds/web/dist
+cp /work/bin/ds-pow /opt/fuckds/bin/ds-pow
+cp /work/scripts/android/android-run.sh /opt/fuckds/android-run.sh
+cp /work/scripts/android/env.android /opt/fuckds/.env
+chmod +x /opt/fuckds/bin/ds-pow /opt/fuckds/android-run.sh
+ls -lh /opt/fuckds/bin/ds-pow
+
 # /etc/resolv.conf 在运行中的容器里是 Docker 的 bind mount：rm 会 EBUSY，
 # 且 bind mount 内容不会进入 docker export。这里只尽力覆盖（非致命）；
 # 手机运行时由 BootService 通过 proot -b 绑定真实 resolv.conf，
