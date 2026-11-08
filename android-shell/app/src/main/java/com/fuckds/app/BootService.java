@@ -132,7 +132,7 @@ public class BootService extends Service {
 
                     proc.destroy();
                     proc = null;
-                    String s = "启动失败：服务监听超时（45 秒），请查看日志";
+                    s = "启动失败：服务监听超时（45 秒），请查看日志";
                     updateNotification(s, false);
                     setStatus(s);
                     break;
