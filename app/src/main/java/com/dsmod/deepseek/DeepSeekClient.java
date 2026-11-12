@@ -199,7 +199,7 @@ public final class DeepSeekClient {
         }
 
         Logs.i(Logs.UPSTREAM, TAG, "completion start: promptChars=" + prompt.length()
-                + " thinking=" + thinking + " search=" + search + " files=" + fileIds.size());
+                + " thinking=" + thinking + " search=" + search + " files=" + (refFileIds == null ? 0 : refFileIds.size()));
         boolean powRetried = false;
         int apiRetries = 0;
         int emptyRetries = 0;

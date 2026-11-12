@@ -772,11 +772,11 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                String errBody = errJson(friendlyMessage(e), typeFor(e.status), e.code);
                 if (e.status == 429) {
-                    writeJsonRetry(out, 429, body, 60);
+                    writeJsonRetry(out, 429, errBody, 60);
                 } else {
-                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                    writeJson(out, e.status >= 400 ? e.status : 502, errBody);
                 }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
@@ -871,11 +871,11 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                String errBody = errJson(friendlyMessage(e), typeFor(e.status), e.code);
                 if (e.status == 429) {
-                    writeJsonRetry(out, 429, body, 60);
+                    writeJsonRetry(out, 429, errBody, 60);
                 } else {
-                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                    writeJson(out, e.status >= 400 ? e.status : 502, errBody);
                 }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
@@ -1115,11 +1115,11 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                String body = anthropicError(e.status, friendlyMessage(e));
+                String errBody = anthropicError(e.status, friendlyMessage(e));
                 if (e.status == 429) {
-                    writeJsonRetry(out, 429, body, 60);
+                    writeJsonRetry(out, 429, errBody, 60);
                 } else {
-                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                    writeJson(out, e.status >= 400 ? e.status : 502, errBody);
                 }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
@@ -1518,11 +1518,11 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                String errBody = errJson(friendlyMessage(e), typeFor(e.status), e.code);
                 if (e.status == 429) {
-                    writeJsonRetry(out, 429, body, 60);
+                    writeJsonRetry(out, 429, errBody, 60);
                 } else {
-                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                    writeJson(out, e.status >= 400 ? e.status : 502, errBody);
                 }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
