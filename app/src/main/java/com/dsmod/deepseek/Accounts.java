@@ -533,7 +533,7 @@ public final class Accounts {
      */
     private static Object defaultMMKV() {
         try {
-            Class<?> mmkv = Class.forName("com.tencent.mmkv.MMKV");
+            Class<?> mmkv = Host.forName("com.tencent.mmkv.MMKV");
             // initialize(Context) -> String rootDir
             for (Method m : mmkv.getDeclaredMethods()) {
                 if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
@@ -569,6 +569,24 @@ public final class Accounts {
                         if (kv != null) return kv;
                     } catch (Throwable ignore) { }
                 }
+            }
+            // mmkvWithID(String) / mmkvWithID(String, int): default id is null
+            for (Method m : mmkv.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+                if (m.getReturnType() != mmkv) continue;
+                Class<?>[] p = m.getParameterTypes();
+                try {
+                    if (p.length == 1 && p[0] == String.class) {
+                        m.setAccessible(true);
+                        Object kv = m.invoke(null, (Object) null);
+                        if (kv != null) return kv;
+                    }
+                    if (p.length == 2 && p[0] == String.class && p[1] == int.class) {
+                        m.setAccessible(true);
+                        Object kv = m.invoke(null, null, 1);
+                        if (kv != null) return kv;
+                    }
+                } catch (Throwable ignore) { }
             }
             tokenError = "MMKV instance not found";
         } catch (Throwable t) {

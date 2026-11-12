@@ -158,7 +158,7 @@ public final class Pow {
 
     private static long solveNative(String challengeHex, String salt, long expireAtNet) {
         try {
-            Class<?> c = Class.forName("com.deepseek.crypto.PowCalculator");
+            Class<?> c = Host.forName("com.deepseek.crypto.PowCalculator");
             Object inst;
             try {
                 Field f = c.getField("a");

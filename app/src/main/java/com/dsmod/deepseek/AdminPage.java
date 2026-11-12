@@ -278,10 +278,10 @@ async function saveConfig(){
 
 function renderLogs(){
   var q = (document.getElementById('logSearch').value||'').toLowerCase();
-  var lines = (logRaw||'').split('\n');
+  var lines = (logRaw||'').split('\\n');
   if(q) lines = lines.filter(function(l){return l.toLowerCase().indexOf(q)>=0;});
   var el = document.getElementById('logs');
-  el.textContent = lines.join('\n') || '（空）';
+  el.textContent = lines.join('\\n') || '（空）';
   el.scrollTop = el.scrollHeight;
 }
 function setLogCat(cat){

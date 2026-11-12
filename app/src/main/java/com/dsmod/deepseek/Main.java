@@ -44,6 +44,7 @@ public class Main implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (lpparam == null || !HOST_PACKAGE.equals(lpparam.packageName)) return;
+        Host.set(lpparam.classLoader);
         String process = lpparam.processName == null ? HOST_PACKAGE : lpparam.processName;
         xlog("module loaded: pkg=" + lpparam.packageName + " process=" + process
                 + " version=" + Main.class.getName());
