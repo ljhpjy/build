@@ -1,6 +1,5 @@
 package com.dsmod.deepseek;
 
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -400,7 +399,7 @@ public final class ChatRunner {
             } catch (DeepSeekClient.ApiException e) {
                 throw e;
             } catch (Throwable t) {
-                Log.w(TAG, "image upload failed (ignored): " + t);
+                Logs.w(Logs.CHAT, TAG, "image upload failed (ignored): " + t);
             }
         }
 

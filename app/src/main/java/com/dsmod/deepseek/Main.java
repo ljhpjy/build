@@ -2,11 +2,9 @@ package com.dsmod.deepseek;
 
 import android.app.Application;
 import android.content.Context;
-import android.util.Log;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
@@ -30,17 +28,11 @@ public class Main implements IXposedHookLoadPackage {
     private static volatile boolean bootstrapped = false;
 
     private static void xlog(String message) {
-        Log.i(TAG, message);
-        try {
-            XposedBridge.log("[DSMOD] " + message);
-        } catch (Throwable ignore) { }
+        Logs.i(Logs.MAIN, TAG, message);
     }
 
     private static void xerr(String message, Throwable t) {
-        Log.e(TAG, message, t);
-        try {
-            XposedBridge.log("[DSMOD] " + message + ": " + t);
-        } catch (Throwable ignore) { }
+        Logs.e(Logs.MAIN, TAG, message, t);
     }
 
     static {
@@ -139,6 +131,7 @@ public class Main implements IXposedHookLoadPackage {
             @Override
             public void run() {
                 try {
+                    Logs.init(host);
                     Accounts.init(host);
                     LocalApiServer.ensureStarted(host);
                     Notifier.show(host);

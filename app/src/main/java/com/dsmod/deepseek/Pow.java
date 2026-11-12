@@ -176,7 +176,7 @@ public final class Pow {
                 return n >= 0 ? n : -1L;
             }
         } catch (Throwable t) {
-            Log.d(TAG, "host PowCalculator unavailable: " + t);
+            Logs.d(Logs.UPSTREAM, TAG, "host PowCalculator unavailable: " + t);
         }
         return -1L;
     }

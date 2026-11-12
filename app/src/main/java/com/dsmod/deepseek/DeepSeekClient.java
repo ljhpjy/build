@@ -1,6 +1,5 @@
 package com.dsmod.deepseek;
 
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -127,7 +126,7 @@ public final class DeepSeekClient {
                 Thread.sleep(90L - elapsed + (long) (Math.random() * 60.0));
             } catch (InterruptedException ignored) { }
         }
-        Log.d(TAG, "pow solved in " + (System.currentTimeMillis() - begin)
+        Logs.d(Logs.UPSTREAM, TAG, "pow solved in " + (System.currentTimeMillis() - begin)
                 + "ms difficulty=" + c.difficulty);
         Solved solved = new Solved();
         solved.header = Pow.buildHeader(c.algorithm, c.challenge, c.salt, answer, c.signature, c.targetPath);
@@ -531,9 +530,9 @@ public final class DeepSeekClient {
             device.put("device_id", deviceId);
             device.put("device_model", "");
             post("/api/v0/users/auth_token/check_device", device);
-            Log.d(TAG, "cold start sequence done");
+            Logs.d(Logs.UPSTREAM, TAG, "cold start sequence done");
         } catch (Throwable t) {
-            Log.w(TAG, "cold start failed (ignored): " + t);
+            Logs.w(Logs.UPSTREAM, TAG, "cold start failed (ignored): " + t);
         }
     }
 

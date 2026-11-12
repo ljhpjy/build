@@ -1,7 +1,6 @@
 package com.dsmod.deepseek;
 
 import android.content.Context;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -54,44 +53,12 @@ public final class LocalApiServer {
 
     private LocalApiServer() {}
 
-    private static synchronized void log(String message) {
-        Log.i(TAG, message);
-        try {
-            Context ctx = appContext;
-            if (ctx == null) return;
-            File file = new File(ctx.getFilesDir(), "dsmod_api.log");
-            if (file.length() > 512 * 1024) {
-                File old = new File(ctx.getFilesDir(), "dsmod_api.log.1");
-                if (old.exists()) old.delete();
-                file.renameTo(old);
-            }
-            try (FileOutputStream fos = new FileOutputStream(file, true)) {
-                String line = new java.text.SimpleDateFormat("MM-dd HH:mm:ss",
-                        java.util.Locale.US).format(new java.util.Date()) + " " + message + "\n";
-                fos.write(line.getBytes(StandardCharsets.UTF_8));
-            }
-        } catch (Throwable ignore) { }
+    private static void log(String cat, String message) {
+        Logs.i(cat, TAG, message);
     }
 
-    private static String readLogTail(int lines) {
-        try {
-            Context ctx = appContext;
-            if (ctx == null) return "";
-            File file = new File(ctx.getFilesDir(), "dsmod_api.log");
-            if (!file.isFile()) return "";
-            byte[] data = readAll(new FileInputStream(file));
-            String text = new String(data, StandardCharsets.UTF_8);
-            String[] all = text.split("\n", -1);
-            int start = Math.max(0, all.length - Math.max(1, lines));
-            StringBuilder sb = new StringBuilder();
-            for (int i = start; i < all.length; i++) {
-                if (i > start) sb.append('\n');
-                sb.append(all[i]);
-            }
-            return sb.toString();
-        } catch (Throwable t) {
-            return "";
-        }
+    private static String readLogTail(String cat, int lines) {
+        return Logs.tail(cat, lines);
     }
 
     public static boolean isRunning() {
@@ -112,6 +79,7 @@ public final class LocalApiServer {
                 JSONObject pool = new JSONObject(Accounts.statusJson());
                 o.put("host_token_present", pool.optBoolean("host_token_present"));
                 o.put("last_picked", pool.optInt("last_picked", 0));
+                o.put("token_error", pool.optString("token_error", ""));
             } catch (Throwable ignore) { }
             o.put("api_key", !Config.apiKey.isEmpty());
             o.put("thinking", Config.thinking);
@@ -144,9 +112,9 @@ public final class LocalApiServer {
             Thread acceptor = new Thread(() -> acceptLoop(ss), "dsmod-acceptor");
             acceptor.setDaemon(true);
             acceptor.start();
-            log("local api listening on " + Config.host + ":" + Config.port);
+            log(Logs.MAIN, "local api listening on " + Config.host + ":" + Config.port);
         } catch (Throwable t) {
-            Log.e(TAG, "start local api failed on port " + Config.port, t);
+            Logs.e(Logs.MAIN, TAG, "start local api failed on port " + Config.port, t);
             STARTED.set(false);
         }
     }
@@ -192,9 +160,14 @@ public final class LocalApiServer {
                 writeJson(out, 400, errJson("bad request", "invalid_request", null));
                 return;
             }
-            String path = req.path;
-            int q = path.indexOf('?');
-            if (q >= 0) path = path.substring(0, q);
+            String rawPath = req.path;
+            String query = "";
+            int q = rawPath.indexOf('?');
+            if (q >= 0) {
+                query = rawPath.substring(q + 1);
+                rawPath = rawPath.substring(0, q);
+            }
+            String path = rawPath;
             String reqId = "req_" + Long.toHexString(System.currentTimeMillis())
                     + Integer.toHexString((int) (Math.random() * 0xFFFF));
             REQ_ID.set(reqId);
@@ -317,10 +290,43 @@ public final class LocalApiServer {
                     writeJson(out, 401, errJson("invalid api key", "authentication_error", null));
                     return;
                 }
+                String cat = queryParam(query, "cat");
+                int lines = 300;
+                String ls = queryParam(query, "lines");
+                if (!ls.isEmpty()) {
+                    try { lines = Integer.parseInt(ls); } catch (Throwable ignore) { }
+                }
+                org.json.JSONArray cats = new org.json.JSONArray();
+                for (String c : Logs.categories()) cats.put(c);
                 JSONObject logs = new JSONObject();
-                logs.put("lines", 300);
-                logs.put("log", readLogTail(300));
+                logs.put("lines", lines);
+                logs.put("cat", cat);
+                logs.put("categories", cats);
+                logs.put("log", readLogTail(cat, lines));
                 writeJson(out, 200, logs.toString());
+                return;
+            }
+            if ("/admin/api/logs/export".equals(path)) {
+                if (!authorized(req)) {
+                    writeJson(out, 401, errJson("invalid api key", "authentication_error", null));
+                    return;
+                }
+                String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
+                        java.util.Locale.US).format(new java.util.Date());
+                String cat = queryParam(query, "cat");
+                String suffix = cat.isEmpty() ? "" : "-" + cat;
+                writeDownload(out, "dsmod-log" + suffix + "-" + ts + ".txt", Logs.export(cat));
+                return;
+            }
+            if ("/admin/api/logs/clear".equals(path)) {
+                if (!authorized(req)) {
+                    writeJson(out, 401, errJson("invalid api key", "authentication_error", null));
+                    return;
+                }
+                Logs.clear();
+                JSONObject root = new JSONObject();
+                root.put("cleared", true);
+                writeJson(out, 200, root.toString());
                 return;
             }
             if ("/healthz".equals(path) || "/health".equals(path)) {
@@ -396,13 +402,20 @@ public final class LocalApiServer {
             }
             writeJson(out, 404, errJson("not found: " + path, "not_found", null));
         } catch (Throwable t) {
-            ERRORS.incrementAndGet();
-            lastError = String.valueOf(t);
-            log("connection error: " + t);
+            String msg = String.valueOf(t);
+            // Client went away (browser refresh / SSE cancel): expected, not a server fault.
+            if (msg.contains("Broken pipe") || msg.contains("Connection reset")
+                    || msg.contains("Socket closed")) {
+                log(Logs.HTTP, "client closed: " + msg);
+            } else {
+                ERRORS.incrementAndGet();
+                lastError = msg;
+                log(Logs.HTTP, "connection error: " + msg);
+            }
         } finally {
             if (acquired) gate.release();
             if (logLine != null) {
-                log(logLine + " " + (System.currentTimeMillis() - startedAt) + "ms");
+                log(Logs.HTTP, logLine + " " + (System.currentTimeMillis() - startedAt) + "ms");
             }
             REQ_ID.remove();
             try { socket.close(); } catch (Throwable ignore) { }
@@ -486,6 +499,33 @@ public final class LocalApiServer {
                 + "Access-Control-Allow-Origin: *\r\n"
                 + "Access-Control-Allow-Headers: Content-Type, Authorization, x-api-key, anthropic-version, x-requested-with\r\n"
                 + "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(head.getBytes(StandardCharsets.UTF_8));
+        out.write(data);
+        out.flush();
+    }
+
+    private static String queryParam(String query, String key) {
+        if (query == null || query.isEmpty()) return "";
+        for (String part : query.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) continue;
+            if (!key.equals(part.substring(0, eq))) continue;
+            try {
+                return java.net.URLDecoder.decode(part.substring(eq + 1), "UTF-8");
+            } catch (Throwable t) {
+                return part.substring(eq + 1);
+            }
+        }
+        return "";
+    }
+
+    private static void writeDownload(OutputStream out, String filename, String text) throws Exception {
+        byte[] data = text.getBytes(StandardCharsets.UTF_8);
+        String head = "HTTP/1.1 200 OK\r\n"
+                + "Content-Type: text/plain; charset=utf-8\r\n"
+                + "Content-Disposition: attachment; filename=\"" + filename + "\"\r\n"
+                + "Content-Length: " + data.length + "\r\n"
                 + "Connection: close\r\n\r\n";
         out.write(head.getBytes(StandardCharsets.UTF_8));
         out.write(data);
@@ -1594,7 +1634,10 @@ public final class LocalApiServer {
                 + "<li>GET /admin/api/overview</li>"
                 + "</ul></body></html>";
     }
+    private static final boolean ADMIN_PAGE_V2 = true;
+
     private static String adminHtml() {
+        if (ADMIN_PAGE_V2) return AdminPage.build(Config.port);
         return "<!doctype html><html><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
                 + "<title>DSMod Admin</title><style>"
@@ -1752,7 +1795,7 @@ public final class LocalApiServer {
                 fos.write(o.toString().getBytes(StandardCharsets.UTF_8));
             }
         } catch (Throwable t) {
-            Log.w(TAG, "save config failed", t);
+            Logs.w(Logs.CONFIG, TAG, "save config failed", t);
         }
     }
 
@@ -1857,7 +1900,7 @@ public final class LocalApiServer {
                 Config.requestTimeoutMs = o.optLong("requestTimeoutMs", Config.requestTimeoutMs);
             }
         } catch (Throwable t) {
-            Log.w(TAG, "load config file failed", t);
+            Logs.w(Logs.CONFIG, TAG, "load config file failed", t);
         }
     }
 

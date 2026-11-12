@@ -1,7 +1,6 @@
 package com.dsmod.deepseek;
 
 import android.content.Context;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,6 +43,7 @@ public final class Accounts {
     private static String cachedCurrent;
     private static volatile long lastTokenReadAt = 0L;
     private static volatile boolean refresherStarted = false;
+    private static volatile String tokenError = "";
 
     private Accounts() {}
 
@@ -101,10 +101,12 @@ public final class Accounts {
             if (token != null && !token.isEmpty()) {
                 cachedCurrent = token;
                 lastTokenReadAt = System.currentTimeMillis();
+                tokenError = "";
                 return token;
             }
+            tokenError = "token field not found in key_user_info";
         } catch (Throwable t) {
-            Log.e(TAG, "read MMKV token failed", t);
+            Logs.e(Logs.ACCOUNT, TAG, "read MMKV token failed", t);
         }
         return cachedCurrent;
     }
@@ -120,7 +122,7 @@ public final class Accounts {
             entry.token = token;
             POOL.add(entry);
             persist();
-            Log.i(TAG, "account captured: " + mask(token));
+            Logs.i(Logs.ACCOUNT, TAG, "account captured: " + mask(token));
         }
     }
 
@@ -220,7 +222,7 @@ public final class Accounts {
             e.cooldownUntil = System.currentTimeMillis() + AUTH_INVALID_COOLDOWN_MS;
             e.lastError = message == null ? "auth_expired" : message;
             e.lastErrorAt = System.currentTimeMillis();
-            Log.w(TAG, "account disabled (auth): " + mask(token));
+            Logs.w(Logs.ACCOUNT, TAG, "account disabled (auth): " + mask(token));
         }
     }
 
@@ -408,6 +410,7 @@ public final class Accounts {
                 }
                 root.put("host_token_present", host);
                 root.put("last_picked", lastPicked >= 0 ? lastPicked + 1 : 0);
+                root.put("token_error", tokenError);
                 root.put("accounts", accounts);
             }
         } catch (Throwable ignore) { }
@@ -477,7 +480,7 @@ public final class Accounts {
                 }
             }
         } catch (Throwable t) {
-            Log.w(TAG, "load pool file failed", t);
+            Logs.w(Logs.ACCOUNT, TAG, "load pool file failed", t);
         }
     }
 
@@ -492,7 +495,7 @@ public final class Accounts {
                 fos.write(root.toString().getBytes(StandardCharsets.UTF_8));
             }
         } catch (Throwable t) {
-            Log.w(TAG, "persist pool failed", t);
+            Logs.w(Logs.ACCOUNT, TAG, "persist pool failed", t);
         }
     }
 
@@ -524,27 +527,66 @@ public final class Accounts {
     /* MMKV reflection                                                     */
     /* ------------------------------------------------------------------ */
 
-    private static Object defaultMMKV() throws Exception {
-        Class<?> c = Class.forName("com.tencent.mmkv.MMKV");
+    /**
+     * Host R8 renames MMKV methods (defaultMMKV -> l, getString -> j, ...),
+     * so look them up by SIGNATURE, never by name.
+     */
+    private static Object defaultMMKV() {
         try {
-            Method init = c.getMethod("initialize", Context.class);
-            init.setAccessible(true);
-            init.invoke(null, ctx);
-        } catch (Throwable ignore) { }
-        try {
-            Method m = c.getMethod("defaultMMKV");
-            m.setAccessible(true);
-            return m.invoke(null);
-        } catch (Throwable ignore) { }
-        try {
-            Method m = c.getMethod("defaultMMKV", int.class);
-            m.setAccessible(true);
-            return m.invoke(null, 1);
-        } catch (Throwable ignore) { }
+            Class<?> mmkv = Class.forName("com.tencent.mmkv.MMKV");
+            // initialize(Context) -> String rootDir
+            for (Method m : mmkv.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+                Class<?>[] p = m.getParameterTypes();
+                if (p.length == 1 && p[0] == Context.class && m.getReturnType() == String.class) {
+                    try {
+                        m.setAccessible(true);
+                        m.invoke(null, ctx);
+                        break;
+                    } catch (Throwable ignore) { }
+                }
+            }
+            // defaultMMKV() -> MMKV (static, no args)
+            for (Method m : mmkv.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+                if (m.getReturnType() != mmkv) continue;
+                if (m.getParameterTypes().length != 0) continue;
+                try {
+                    m.setAccessible(true);
+                    Object kv = m.invoke(null);
+                    if (kv != null) return kv;
+                } catch (Throwable ignore) { }
+            }
+            // defaultMMKV(int) -> MMKV
+            for (Method m : mmkv.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+                if (m.getReturnType() != mmkv) continue;
+                Class<?>[] p = m.getParameterTypes();
+                if (p.length == 1 && p[0] == int.class) {
+                    try {
+                        m.setAccessible(true);
+                        Object kv = m.invoke(null, 1);
+                        if (kv != null) return kv;
+                    } catch (Throwable ignore) { }
+                }
+            }
+            tokenError = "MMKV instance not found";
+        } catch (Throwable t) {
+            tokenError = "MMKV class not found: " + t;
+        }
         return null;
     }
 
     private static String readString(Object kv, String key) {
+        // SharedPreferences.getString is a framework interface method; R8 cannot rename it.
+        try {
+            if (kv instanceof android.content.SharedPreferences) {
+                String v = ((android.content.SharedPreferences) kv).getString(key, "");
+                if (v != null) return v;
+            }
+        } catch (Throwable t) {
+            tokenError = "getString failed: " + t;
+        }
         for (Method m : kv.getClass().getMethods()) {
             if (!m.getReturnType().equals(String.class)) continue;
             String name = m.getName();

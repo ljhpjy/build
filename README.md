@@ -21,7 +21,7 @@
 - **段落拼接顺序固定**：客户端 system 最上面 → 工具声明 → 自带协议提示词（中间）→ 对话历史（最后）
 - **原生 DSML 工具调用**：解析成标准 `tool_calls` / `tool_use`，并从 `content` / SSE 里剔除
 - **流式协议过滤**：SSE 逐行过滤 DSML / RESULT / END / 伪造段标题，协议内容不会漏给客户端
-- **文件日志**：`files/dsmod_api.log`（512KB 滚动），可通过 `GET /admin/api/logs` 读取
+- **自包含日志**：`files/dsmod_log.txt`（512KB 滚动，自动去敏），`/admin` 可查看/复制/导出；**不写入 logcat / LSPosed 日志**
 - **冷启动序列**：进程内每账号跑一次 settings / check_device，降低"非网页"画像
 - **人类输入停顿**：发送前 120–480ms 随机延迟（`humanTiming`）
 - **`/admin` 控制台**：浏览器打开 `http://127.0.0.1:8765/admin` 查看状态 / 号池（可编辑保存）/ 配置 / 日志；填 API key 后自动带上鉴权
@@ -48,12 +48,15 @@ dsmod-deepseek/
 └── app/
     ├── build.gradle
     └── src/main/
-        ├── AndroidManifest.xml       # Xposed 模块声明 + 前台服务
+        ├── AndroidManifest.xml       # Xposed 模块声明（无 Service / Receiver）
         ├── assets/xposed_init        # com.dsmod.deepseek.Main
         ├── res/values/arrays.xml     # xposedscope = com.deepseek.chat
         └── java/com/dsmod/deepseek/
-            ├── Main.java             # Xposed 入口（hook Application.attach）
+            ├── Main.java             # Xposed 入口（Application + ActivityThread 三重 hook）
             ├── Config.java           # 默认配置
+            ├── Logs.java             # 自包含日志（去敏 / 复制 / 导出）
+            ├── Notifier.java         # 宿主进程常驻通知
+            ├── AdminPage.java        # /admin 深色控制台
             ├── Accounts.java         # token 读取（MMKV）+ 号池
             ├── Pow.java              # DeepSeekHashV1 纯 Java 求解 + 官方 native 加速
             ├── DeepSeekClient.java   # direct 引擎（会话/PoW/SSE/上传）
@@ -138,7 +141,9 @@ curl -N http://127.0.0.1:8765/v1/messages \
 | `GET /admin/api/overview` | 管理 | 状态 + 号池（token 打码） |
 | `GET/POST /admin/api/accounts` | 管理 | 读号池（打码+冷却）/ 整体保存 `{tokens:[...]}` |
 | `GET/POST /admin/api/config` | 管理 | 读 / 更新配置（写回 dsmod_config.json） |
-| `GET /admin/api/logs` | 管理 | 读 `dsmod_api.log` 尾部 300 行 |
+| `GET /admin/api/logs` | 管理 | 读日志尾部 300 行（自动去敏） |
+| `GET /admin/api/logs/export` | 管理 | 下载完整日志（含滚动历史，已去敏） |
+| `POST /admin/api/logs/clear` | 管理 | 清空日志 |
 | `GET /` | 通用 | 说明页 |
 | `GET /admin` | 管理 | 简易控制台（状态 / 号池 / 配置 / 日志） |
 | `POST /v1/embeddings` | OpenAI | 501 友好报错（网页后端不支持） |
@@ -213,6 +218,16 @@ curl -N http://127.0.0.1:8765/v1/messages \
 
 ---
 
+## 日志系统
+
+- **自包含**：`Logs.java`（内存环形 + 文件），不写 logcat / LSPosed 日志
+- **分类**：`MAIN`（注入/生命周期）/ `HTTP`（本地请求）/ `ACCOUNT`（号池）/ `UPSTREAM`（DeepSeek 接口）/ `CHAT`（prompt/工具/响应）/ `CONFIG`
+- **分类文件**：`files/dsmod_log.txt`（全量时间线）+ `files/dsmod_errors.txt`（仅 W/E，便于定位报错），均 512KB 滚动
+- **自动去敏**：`Bearer`、`token`、`apiKey`、`cookie`、≥28 位长串统一打码为 `****`
+- **面板筛选**：分类 chips + 关键字过滤；「复制 / 导出」按当前分类生效
+- **接口**：`GET /admin/api/logs?cat=HTTP&lines=300`、`GET /admin/api/logs/export?cat=HTTP`
+- **清空**：面板「清空日志」或 `POST /admin/api/logs/clear`
+
 ## 配置
 
 写入 `/data/data/com.deepseek.chat/files/dsmod_config.json`（改后重启宿主 App 生效）：
@@ -249,7 +264,7 @@ curl -N http://127.0.0.1:8765/v1/messages \
 - **验证登录态**：「验证全部」逐个调 `GET /api/v0/users/current`；接口 `POST /admin/api/accounts/verify`，返回 `{valid,total,results:[{index,ok,detail}]}`。
 - **轮询规则**：按池顺序轮询，跳过冷却中的号；每号记录 `requests` 次数、`lastUsedAt`、`cooldownMs`、`lastError`。
 - **当前选中谁**：`GET /healthz` 的 `last_picked`（1 起，0 = 尚未使用）；面板 Accounts 表 `last picked` 与行首 ★（★ = 宿主登录号）。
-- **日志证据**：`files/dsmod_api.log` 里每次选中都有一行 `pick #2 of 3`。
+- **日志证据**：`files/dsmod_log.txt`（或 /admin 日志卡片）里每次选中都有一行 `pick #2 of 3`。
 
 > 注意：只有「官方 App 当前登录的账号」能自动入池；其它账号的 token 需要你登录对应账号时从 App 里导出一次（清 localStorage/cookies 换号，避免吊销旧 token）。
 
@@ -264,7 +279,7 @@ curl -N http://127.0.0.1:8765/v1/messages \
 先在 DeepSeek App 内登录。token 从 MMKV 的 `key_user_info` 读取，换号后自动跟上。
 
 **Q：PoW 很慢？**
-优先用官方 `com.deepseek.crypto.PowCalculator`（Rust native，约 20–30ms）；类不存在时回退纯 Java 求解器（较慢），日志标签 `DSMOD`。
+优先用官方 `com.deepseek.crypto.PowCalculator`（Rust native，约 20–30ms）；类不存在时回退纯 Java 求解器（较慢），日志见 `dsmod_log.txt`（标签 DSMOD）。
 
 **Q：为什么多轮工具调用慢 / 429？**
 限流是账号级“窗口内消息条数”，每次工具调用 = 一次完整请求；号池或多等一会儿。
