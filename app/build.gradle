@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.dsmod.deepseek'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.dsmod.deepseek"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    def ksFile = file(System.getenv("KEYSTORE_FILE") ?: "dsmod.keystore")
+
+    if (ksFile.exists()) {
+        signingConfigs {
+            release {
+                storeFile ksFile
+                storePassword System.getenv("KEYSTORE_PASSWORD") ?: "dsmod123456"
+                keyAlias System.getenv("KEY_ALIAS") ?: "dsmod"
+                keyPassword System.getenv("KEY_PASSWORD") ?: "dsmod123456"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (ksFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig false
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+        disable 'MissingTranslation', 'IconMissingDensityFolder'
+    }
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+}

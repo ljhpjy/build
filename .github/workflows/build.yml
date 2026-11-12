@@ -1,288 +1,51 @@
-name: Build Termux native bundle (aarch64)
-
-# 把 fuckds 打包成 Termux 原生可运行包（不依赖 proot / Ubuntu / glibc / npm install）：
-#   - Termux aarch64 官方 Node 运行时（从 Termux 仓库 .deb 解包，Bionic ABI）
-#   - Go 交叉编译的 bin/ds-pow（aarch64 静态）
-#   - 完整源码 + node_modules(Playwright) + web/dist 控制台 + test
-#   - browser 引擎接 Termux 官方 Chromium（pkg install chromium）
-#
-# 产物：fuckds-termux-aarch64.tar.gz（Artifacts 里下载）
+name: Build Xposed Module
 
 on:
-  workflow_dispatch:
-    inputs:
-      termux_node_package:
-        description: 'Termux Node 包（nodejs-lts 或 nodejs）'
-        required: false
-        default: nodejs-lts
-        type: choice
-        options:
-          - nodejs-lts
-          - nodejs
-      playwright_version:
-        description: '覆盖 Playwright 版本（留空使用 package-lock，例如 1.49.1）'
-        required: false
-        default: ''
-      bundle_chromium:
-        description: '把 Chromium + 依赖 .deb 一起打包（离线安装，体积大）'
-        required: false
-        default: true
-        type: boolean
   push:
-    branches: [main, master]
-    tags: ['v*']
-
-permissions:
-  contents: read
-
-concurrency:
-  group: termux-build-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CI_NODE_VERSION: '22'
-  GO_VERSION: '1.23.x'
-  TERMUX_NODE_PACKAGE: ${{ github.event.inputs.termux_node_package || 'nodejs-lts' }}
-  PLAYWRIGHT_VERSION: ${{ github.event.inputs.playwright_version || '' }}
-  BUNDLE_CHROMIUM: ${{ github.event.inputs.bundle_chromium || 'true' }}
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  termux:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          fetch-depth: 0
+          distribution: temurin
+          java-version: '17'
 
-      - name: Setup Node.js (CI 构建/测试)
-        uses: actions/setup-node@v5
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
-          node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            web/package-lock.json
+          gradle-version: '8.9'
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Install server dependencies
-        shell: bash
+      - name: Generate signing keystore
         run: |
-          set -euo pipefail
-          if ! npm ci --no-audit --no-fund; then
-            echo "::warning::npm ci 失败，回退 npm install"
-            npm install --no-audit --no-fund
-          fi
-          if [ -n "${PLAYWRIGHT_VERSION}" ]; then
-            echo "::notice::覆盖 Playwright 版本：${PLAYWRIGHT_VERSION}"
-            npm install --no-save --no-audit --no-fund "playwright@${PLAYWRIGHT_VERSION}"
-          fi
-          node -e 'console.log("playwright", require("playwright/package.json").version)'
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/dsmod.keystore" \
+            -alias dsmod \
+            -keyalg RSA -keysize 2048 -validity 36500 \
+            -storepass dsmod123456 -keypass dsmod123456 \
+            -dname "CN=DSMod, OU=DeepSeek, O=DSMod, L=Local, S=Local, C=CN"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/dsmod.keystore" >> "$GITHUB_ENV"
 
-      - name: Install & build admin web
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd web
-          if ! npm ci --no-audit --no-fund; then
-            echo "::warning::web npm ci 失败，回退 npm install"
-            rm -f package-lock.json
-            npm install --no-audit --no-fund
-          fi
-          npm run build
-          test -s dist/index.html
-          echo "admin dist: $(du -sh dist | cut -f1)"
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: dsmod123456
+          KEY_ALIAS: dsmod
+          KEY_PASSWORD: dsmod123456
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Syntax check
-        shell: bash
-        run: |
-          set -euo pipefail
-          count=0
-          while IFS= read -r -d '' f; do
-            node --check "$f"
-            count=$((count + 1))
-          done < <(find src scripts test -name '*.mjs' -print0)
-          echo "语法检查通过（$count 个 .mjs）"
-
-      - name: Go tests
-        run: go test ./...
-
-      - name: Build ds-pow (host, for Node tests)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p bin
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o bin/ds-pow ./cmd/powd
-          file bin/ds-pow
-
-      - name: Node tests
-        timeout-minutes: 20
-        run: npm test
-
-      - name: Smoke test service (host x64)
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .ci-data
-          DEEPSEEK_USER_TOKEN=ci-dummy-token \
-          DATA_DIR="$PWD/.ci-data" \
-          POW_BIN="$PWD/bin/ds-pow" \
-          ENGINE=direct WARMUP=false HOST=127.0.0.1 PORT=18787 LOG_LEVEL=warn \
-          node src/index.mjs >/tmp/fuckds-ci.log 2>&1 &
-          PID=$!
-          cleanup() { kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; rm -rf .ci-data; }
-          trap cleanup EXIT
-          ok=0
-          for _ in $(seq 1 100); do
-            if curl -fsS http://127.0.0.1:18787/healthz >/tmp/fuckds-health.json 2>/dev/null; then ok=1; break; fi
-            if ! kill -0 "$PID" 2>/dev/null; then
-              echo "服务提前退出"; cat /tmp/fuckds-ci.log; exit 1
-            fi
-            sleep 0.2
-          done
-          if [ "$ok" != 1 ]; then
-            echo "健康检查超时"; cat /tmp/fuckds-ci.log; exit 1
-          fi
-          curl -fsS http://127.0.0.1:18787/healthz; echo
-          curl -fsS http://127.0.0.1:18787/v1/models | grep -q 'deepseek'
-          curl -fsS http://127.0.0.1:18787/admin/ | grep -q 'id="root"'
-          echo "host smoke OK"
-
-      - name: Build ds-pow (Termux aarch64, static)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p bin
-          # Termux 运行 aarch64 Linux **静态** ELF（CGO=0）。
-          # 不启用 -buildmode=pie：静态 ET_EXEC 在 Android 上可直接 exec，
-          # 也不会引入 glibc 的 ld-linux 解释器依赖。
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o bin/ds-pow ./cmd/powd
-          file bin/ds-pow
-          if readelf -l bin/ds-pow | grep -q 'INTERP'; then
-            echo "::error::ds-pow 不是静态 ELF（含 INTERP），Termux 上可能无法启动"
-            exit 1
-          fi
-          go version -m bin/ds-pow | head -20
-
-      - name: Fetch Termux Node runtime (aarch64)
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf dist/fuckds/runtime
-          bash scripts/termux/fetch-runtime.sh dist/fuckds/runtime "${TERMUX_NODE_PACKAGE}"
-
-      - name: Bundle Chromium debs (offline)
-        if: ${{ env.BUNDLE_CHROMIUM != 'false' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/termux/fetch-chromium-debs.sh dist/fuckds/bundled-debs
-
-      - name: Assemble portable bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          BUNDLE=dist/fuckds
-          mkdir -p "$BUNDLE/web" "$BUNDLE/bin" "$BUNDLE/data"
-
-          # 完整项目源码/脚本/测试/前端源码（运行时文件后面单独拷贝）
-          tar -cf - \
-            --exclude='./.git' \
-            --exclude='./.git/*' \
-            --exclude='./.github' \
-            --exclude='./.github/*' \
-            --exclude='./node_modules' \
-            --exclude='./node_modules/*' \
-            --exclude='./web/node_modules' \
-            --exclude='./web/node_modules/*' \
-            --exclude='./web/dist' \
-            --exclude='./web/dist/*' \
-            --exclude='./data' \
-            --exclude='./data/*' \
-            --exclude='./.env' \
-            --exclude='./test/.artifacts' \
-            --exclude='./test/.artifacts/*' \
-            --exclude='./.ci-data' \
-            --exclude='./.ci-data/*' \
-            --exclude='./fuckds.zip' \
-            --exclude='./*.zip' \
-            --exclude='./bin' \
-            --exclude='./bin/*' \
-            --exclude='./dist' \
-            --exclude='./dist/*' \
-            --exclude='./*.apk' \
-            --exclude='./*.tar.gz' \
-            . | tar -xf - -C "$BUNDLE"
-
-          # 运行依赖（Playwright JS；没有原生 npm 模块）
-          rm -rf "$BUNDLE/node_modules"
-          cp -a node_modules "$BUNDLE/node_modules"
-          rm -rf "$BUNDLE/node_modules/.bin"
-
-          # 网页控制台静态资源
-          rm -rf "$BUNDLE/web/dist"
-          cp -a web/dist "$BUNDLE/web/dist"
-
-          # PoW 求解器
-          cp bin/ds-pow "$BUNDLE/bin/ds-pow"
-          chmod 755 "$BUNDLE/bin/ds-pow"
-
-          # 启动器 / 安装器 / Termux 默认配置 / 说明
-          cp scripts/termux/fuckds "$BUNDLE/fuckds"
-          cp scripts/termux/install-termux.sh "$BUNDLE/install-termux.sh"
-          cp scripts/termux/uninstall-termux.sh "$BUNDLE/uninstall-termux.sh"
-          cp scripts/termux/env.termux "$BUNDLE/.env"
-          cp README-TERMUX.md "$BUNDLE/README-TERMUX.md"
-          chmod 755 "$BUNDLE/fuckds" "$BUNDLE/install-termux.sh" "$BUNDLE/uninstall-termux.sh"
-          chmod 600 "$BUNDLE/.env"
-
-          # 构建信息（方便排障时确认版本）
-          {
-            echo "fuckds Termux bundle"
-            echo "commit: ${GITHUB_SHA:-local}"
-            echo "built_at: $(date -u +%FT%TZ)"
-            echo "node_ci: $(node -v)"
-            echo "playwright: $(node -p "require('playwright/package.json').version")"
-            echo "go: $(go version)"
-            echo "ds_pow: $(file -b bin/ds-pow)"
-            echo "node_runtime: $(file -b "$BUNDLE/runtime/bin/node")"
-            echo "termux_packages:"
-            awk -F'\t' '{print "  " $1 " " $2}' "$BUNDLE/runtime/packages.tsv"
-            if [ -d "$BUNDLE/bundled-debs" ]; then
-              echo "chromium_debs: $(find "$BUNDLE/bundled-debs" -maxdepth 1 -type f -name '*.deb' | wc -l) files, $(du -sh "$BUNDLE/bundled-debs" | cut -f1)"
-            fi
-          } > "$BUNDLE/BUILD-INFO.txt"
-          cp "$BUNDLE/BUILD-INFO.txt" dist/BUILD-INFO.txt
-
-          echo "==> bundle size"
-          du -sh "$BUNDLE"
-          ls -lh "$BUNDLE/runtime/bin/node" "$BUNDLE/bin/ds-pow"
-
-      - name: Pack & checksum
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd dist
-          tar --sort=name --mtime='2020-01-01' --owner=0 --group=0 --numeric-owner \
-            -I 'gzip -9n' -cf fuckds-termux-aarch64.tar.gz fuckds
-          sha256sum fuckds-termux-aarch64.tar.gz > fuckds-termux-aarch64.tar.gz.sha256
-          ls -lh
-          cat fuckds-termux-aarch64.tar.gz.sha256
-
-      - name: Upload Termux bundle
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fuckds-termux-aarch64
+          name: dsmod-deepseek-apk
           path: |
-            dist/fuckds-termux-aarch64.tar.gz
-            dist/fuckds-termux-aarch64.tar.gz.sha256
-            dist/BUILD-INFO.txt
+            app/build/outputs/apk/release/*.apk
           if-no-files-found: error
-          retention-days: 30
