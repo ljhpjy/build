@@ -640,7 +640,7 @@ public final class LocalApiServer {
             throw new DeepSeekClient.ApiException(429,
                     "all accounts are cooling down, retry later", "rate_limited");
         }
-        log(Accounts.lastPickLabel());
+        log(Logs.ACCOUNT, Accounts.lastPickLabel());
         return token;
     }
 

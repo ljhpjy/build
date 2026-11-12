@@ -68,6 +68,7 @@ public final class Logs {
 
     public static void i(String cat, String tag, String msg) { write("I", cat, tag, msg, null); }
     public static void w(String cat, String tag, String msg) { write("W", cat, tag, msg, null); }
+    public static void w(String cat, String tag, String msg, Throwable t) { write("W", cat, tag, msg, t); }
     public static void e(String cat, String tag, String msg) { write("E", cat, tag, msg, null); }
     public static void e(String cat, String tag, String msg, Throwable t) { write("E", cat, tag, msg, t); }
     public static void d(String cat, String tag, String msg) { write("D", cat, tag, msg, null); }
