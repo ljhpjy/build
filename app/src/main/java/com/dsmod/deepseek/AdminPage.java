@@ -168,7 +168,7 @@ async function load(){
     document.getElementById('state').textContent = ok?'运行中':'已停止';
     document.getElementById('mReq').textContent = s.requests;
     document.getElementById('mErr').textContent = s.errors;
-    document.getElementById('mAcc').innerHTML = s.accounts_active+'<small> / '+s.accounts+' 个</small>';
+    document.getElementById('mAcc').innerHTML = (s.accounts_active===undefined?0:s.accounts_active)+'<small> / '+s.accounts+' 个</small>';
     document.getElementById('mUp').textContent = fmtUp(s.uptime_sec);
   }catch(e){
     document.getElementById('dot').className='dot off';

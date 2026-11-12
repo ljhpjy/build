@@ -150,6 +150,19 @@ curl -N http://127.0.0.1:8765/v1/messages \
 
 鉴权：`dsmod_config.json` 里的 `apiKey` 非空时要求 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
 
+### 错误分类（客户端可区分）
+
+| HTTP | 含义 | 响应内容 |
+| --- | --- | --- |
+| 429 | **上游限流 / 触发门限** | `{"error":{"type":"rate_limit_error","code":"rate_limited","message":"上游限流（rate_limited）：…"}}`，并带 `Retry-After: 60` |
+| 502 | **上游接口失败** | `code:"upstream_error"` / `session_failed` / `empty_stream` 等，message 以“上游接口失败”开头 |
+| 401 | 登录失效 | `code:"auth_expired"`，该号自动停用 24h |
+| 503 | 账号不可用 | `code:"account_unavailable"`（未登录 / 全部号停用） |
+| 413 | 上下文过长 | `code:"prompt_too_long"` |
+
+多账号：同一请求内遇到 401/429/5xx 会自动换下一个号重试（fuckds 行为）；命中限流的号冷却 60s。单账号命中限流时立即返回 429 + `Retry-After: 60`，不傻等。默认并发 1（与 fuckds `CONCURRENCY=1` 一致），管理接口不受并发闸门影响。
+鉴权：`dsmod_config.json` 里的 `apiKey` 非空时要求 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
+
 ---
 
 ## prompt 拼接

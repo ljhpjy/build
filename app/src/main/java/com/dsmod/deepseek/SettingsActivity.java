@@ -318,8 +318,10 @@ public class SettingsActivity extends Activity {
             mUp.setText(fmtUp(o.optLong("uptime_sec")));
             String tokenError = o.optString("token_error", "");
             String lastError = o.optString("last_error", "");
+            String lastKind = o.optString("last_error_kind", "");
             String err = !tokenError.isEmpty() ? "Token: " + tokenError
-                    : (!lastError.isEmpty() ? "最近错误: " + lastError : "");
+                    : (!lastError.isEmpty() ? "最近错误: " + lastError
+                    : (!lastKind.isEmpty() ? "最近错误类型: " + lastKind : ""));
             if (!err.isEmpty()) {
                 errorText.setText(err);
                 errorText.setVisibility(View.VISIBLE);

@@ -95,6 +95,7 @@ public final class DeepSeekClient {
         if (id.isEmpty()) {
             throw new ApiException(502, "create session failed: " + msgOf(parse(text), text), "session_failed");
         }
+        Logs.d(Logs.UPSTREAM, TAG, "session created");
         return id;
     }
 
@@ -158,6 +159,7 @@ public final class DeepSeekClient {
         if (c.challenge.isEmpty() || c.salt.isEmpty()) {
             throw new ApiException(502, "pow challenge missing fields", "pow_challenge_failed");
         }
+        Logs.d(Logs.UPSTREAM, TAG, "challenge fetched");
         return c;
     }
 
@@ -196,6 +198,8 @@ public final class DeepSeekClient {
             throw new ApiException(400, "build completion body failed: " + t, "invalid_request");
         }
 
+        Logs.i(Logs.UPSTREAM, TAG, "completion start: promptChars=" + prompt.length()
+                + " thinking=" + thinking + " search=" + search + " files=" + fileIds.size());
         boolean powRetried = false;
         int apiRetries = 0;
         int emptyRetries = 0;
@@ -290,6 +294,9 @@ public final class DeepSeekClient {
         reply.reasoning = collect(state, "THINK");
         reply.usage = state.usage;
         reply.firstTokenMs = state.firstTokenAt > 0 ? state.firstTokenAt - t0 : -1;
+        Logs.i(Logs.UPSTREAM, TAG, "completion done: content=" + reply.content.length()
+                + " reasoning=" + reply.reasoning.length()
+                + " ms=" + (System.currentTimeMillis() - t0));
         return reply;
     }
 
@@ -568,7 +575,7 @@ public final class DeepSeekClient {
             conn = (HttpURLConnection) new URL(baseUrl + path).openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(20000);
-            conn.setReadTimeout((int) Math.min(Config.requestTimeoutMs, 600000L));
+            conn.setReadTimeout((int) Math.min(Config.requestTimeoutMs, 120000L));
             conn.setInstanceFollowRedirects(true);
             applyHeaders(conn, false);
             int code = conn.getResponseCode();
@@ -682,7 +689,7 @@ public final class DeepSeekClient {
         HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         conn.setRequestMethod("POST");
         conn.setConnectTimeout(20000);
-        conn.setReadTimeout((int) Math.min(Config.requestTimeoutMs, 600000L));
+        conn.setReadTimeout((int) Math.min(Config.requestTimeoutMs, 120000L));
         conn.setDoOutput(true);
         conn.setInstanceFollowRedirects(true);
         applyHeaders(conn, true);

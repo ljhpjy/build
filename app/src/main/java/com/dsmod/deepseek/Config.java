@@ -31,8 +31,8 @@ public final class Config {
 
     /** 一次请求里最多自动续跑的工具轮次（收到 tool_calls 后再发一轮）。 */
     public static int maxRounds = 5;
-    /** 上游并发上限（Semaphore）。 */
-    public static int concurrency = 2;
+    /** 上游并发上限（Semaphore）；fuckds 默认并发 1，更保守、更少风控。 */
+    public static int concurrency = 1;
 
     /** 单次上游请求总超时。 */
     public static long requestTimeoutMs = 240_000L;

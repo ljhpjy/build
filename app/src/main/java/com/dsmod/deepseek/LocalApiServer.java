@@ -50,6 +50,7 @@ public final class LocalApiServer {
     private static final java.util.concurrent.atomic.AtomicLong ERRORS =
             new java.util.concurrent.atomic.AtomicLong();
     private static volatile String lastError = "";
+    private static volatile String lastErrorKind = "";
 
     private LocalApiServer() {}
 
@@ -75,6 +76,7 @@ public final class LocalApiServer {
             o.put("version", VERSION);
             o.put("token", Accounts.currentToken() != null);
             o.put("accounts", Accounts.size());
+            o.put("accounts_active", Accounts.activeCount());
             try {
                 JSONObject pool = new JSONObject(Accounts.statusJson());
                 o.put("host_token_present", pool.optBoolean("host_token_present"));
@@ -86,6 +88,7 @@ public final class LocalApiServer {
             o.put("requests", REQUESTS.get());
             o.put("errors", ERRORS.get());
             o.put("last_error", lastError);
+            o.put("last_error_kind", lastErrorKind);
             o.put("uptime_sec", startedAtWall == 0L ? 0L
                     : (System.currentTimeMillis() - startedAtWall) / 1000L);
         } catch (Throwable ignore) { }
@@ -145,13 +148,6 @@ public final class LocalApiServer {
         String logLine = null;
         long startedAt = 0L;
         try {
-            acquired = gate.tryAcquire(30, java.util.concurrent.TimeUnit.SECONDS);
-            if (!acquired) {
-                writeJson(socket.getOutputStream(), 503,
-                        errJson("server busy", "server_error", "busy"));
-                return;
-            }
-            REQUESTS.incrementAndGet();
             socket.setSoTimeout(120000);
             InputStream in = new BufferedInputStream(socket.getInputStream());
             OutputStream out = socket.getOutputStream();
@@ -168,6 +164,16 @@ public final class LocalApiServer {
                 rawPath = rawPath.substring(0, q);
             }
             String path = rawPath;
+            REQUESTS.incrementAndGet();
+            // Throttle only upstream /v1/* calls; admin + health stay responsive
+            // even while a chat request is stuck in the upstream engine.
+            if (path.startsWith("/v1/")) {
+                acquired = gate.tryAcquire(30, java.util.concurrent.TimeUnit.SECONDS);
+                if (!acquired) {
+                    writeJson(out, 503, errJson("server busy", "server_error", "busy"));
+                    return;
+                }
+            }
             String reqId = "req_" + Long.toHexString(System.currentTimeMillis())
                     + Integer.toHexString((int) (Math.random() * 0xFFFF));
             REQ_ID.set(reqId);
@@ -592,6 +598,33 @@ public final class LocalApiServer {
         return root.toString();
     }
 
+    /** Human-readable Chinese prefix so callers can tell rate-limit from upstream failure. */
+    private static String friendlyMessage(DeepSeekClient.ApiException e) {
+        String code = e.code == null ? "" : e.code;
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        if (e.status == 429) return "上游限流（" + (code.isEmpty() ? "rate_limited" : code) + "）：" + msg;
+        if (e.status == 401) return "登录失效（" + (code.isEmpty() ? "auth_expired" : code) + "）：" + msg;
+        if (e.status == 503) return "账号不可用（" + (code.isEmpty() ? "account_unavailable" : code) + "）：" + msg;
+        if (e.status == 413) return "上下文过长（" + (code.isEmpty() ? "prompt_too_long" : code) + "）：" + msg;
+        if (e.status >= 500) return "上游接口失败（" + (code.isEmpty() ? "upstream_error" : code) + "）：" + msg;
+        return msg;
+    }
+
+    /** JSON error response with a Retry-After header (rate-limit). */
+    private static void writeJsonRetry(OutputStream out, int code, String body, int retryAfterSec)
+            throws Exception {
+        byte[] data = body.getBytes(StandardCharsets.UTF_8);
+        String head = "HTTP/1.1 " + code + " " + reason(code) + "\r\n"
+                + "Content-Type: application/json; charset=utf-8\r\n"
+                + "Content-Length: " + data.length + "\r\n"
+                + "Retry-After: " + retryAfterSec + "\r\n"
+                + "Access-Control-Allow-Origin: *\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(head.getBytes(StandardCharsets.UTF_8));
+        out.write(data);
+        out.flush();
+    }
+
     private static String anthropicError(int status, String message) {
         JSONObject error = new JSONObject();
         JSONObject root = new JSONObject();
@@ -644,17 +677,52 @@ public final class LocalApiServer {
         return token;
     }
 
+    private interface AccountAttempt<T> {
+        T run(String token) throws DeepSeekClient.ApiException;
+    }
+
+    /**
+     * fuckds-style failover: one attempt per pool account. Account-scoped
+     * failures (401 / 429 / 5xx) park that account and immediately retry
+     * with the next one inside the same request.
+     */
+    private static <T> T withFailover(AccountAttempt<T> attempt) throws DeepSeekClient.ApiException {
+        int total = Math.max(1, Accounts.size());
+        DeepSeekClient.ApiException last = null;
+        for (int i = 0; i < total; i++) {
+            String token = pickToken();
+            try {
+                return attempt.run(token);
+            } catch (DeepSeekClient.ApiException e) {
+                if (e.status == 401) {
+                    Accounts.markAuthFailed(token, e.getMessage());
+                } else if (e.status == 429) {
+                    Accounts.markRateLimited(token, Config.rateLimitCooldownMs);
+                } else if (e.status >= 500) {
+                    Accounts.markError(token, e.getMessage());
+                } else {
+                    throw e;
+                }
+                last = e;
+                Logs.w(Logs.ACCOUNT, TAG, "failover after " + e.status + " "
+                        + (e.code == null ? "" : e.code) + ", attempts=" + total);
+            }
+        }
+        throw last != null ? last
+                : new DeepSeekClient.ApiException(503, "no account available", "account_unavailable");
+    }
+
     private static void handleOpenAiChat(OutputStream out, String body) {
         String id = "chatcmpl-" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
         String token = null;
         try {
             ChatRunner.Request req = ChatRunner.normalizeOpenAI(new JSONObject(body));
-            token = pickToken();
-            DeepSeekClient client = new DeepSeekClient(token, deviceId);
             final String sid = id;
             final String model = req.model;
 
             if (req.stream) {
+                token = pickToken();
+                DeepSeekClient client = new DeepSeekClient(token, deviceId);
                 writeSseHeaders(out);
                 final boolean[] roleSent = {false};
                 ChatRunner.StreamSink sink = new ChatRunner.StreamSink() {
@@ -684,9 +752,18 @@ public final class LocalApiServer {
                 return;
             }
 
-            ChatRunner.Result result = ChatRunner.run(req, client, null);
+            ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                @Override
+                public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                }
+            });
             writeJson(out, 200, buildOpenAiResponse(id, req.model, result).toString());
         } catch (DeepSeekClient.ApiException e) {
+            lastErrorKind = e.code == null ? "" : e.code;
+            Logs.e(Logs.HTTP, TAG, "api error: " + e.status + " "
+                    + (e.code == null ? "" : e.code + " ")
+                    + (e.getMessage() == null ? "" : e.getMessage()));
             if (e.status == 401 && token != null) {
                 Accounts.markAuthFailed(token, e.getMessage());
             } else if (e.status == 429 && token != null) {
@@ -695,8 +772,12 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                writeJson(out, e.status >= 400 ? e.status : 502,
-                        errJson(e.getMessage(), typeFor(e.status), e.code));
+                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                if (e.status == 429) {
+                    writeJsonRetry(out, 429, body, 60);
+                } else {
+                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
             try {
@@ -778,6 +859,10 @@ public final class LocalApiServer {
             resp.put("usage", usageOf(result));
             writeJson(out, 200, resp.toString());
         } catch (DeepSeekClient.ApiException e) {
+            lastErrorKind = e.code == null ? "" : e.code;
+            Logs.e(Logs.HTTP, TAG, "api error: " + e.status + " "
+                    + (e.code == null ? "" : e.code + " ")
+                    + (e.getMessage() == null ? "" : e.getMessage()));
             if (e.status == 401 && token != null) {
                 Accounts.markAuthFailed(token, e.getMessage());
             } else if (e.status == 429 && token != null) {
@@ -786,8 +871,12 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                writeJson(out, e.status >= 400 ? e.status : 502,
-                        errJson(e.getMessage(), typeFor(e.status), e.code));
+                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                if (e.status == 429) {
+                    writeJsonRetry(out, 429, body, 60);
+                } else {
+                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
             try {
@@ -978,10 +1067,9 @@ public final class LocalApiServer {
         String token = null;
         try {
             ChatRunner.Request req = ChatRunner.normalizeAnthropic(new JSONObject(body));
-            token = pickToken();
-            DeepSeekClient client = new DeepSeekClient(token, deviceId);
-
             if (req.stream) {
+                token = pickToken();
+                DeepSeekClient client = new DeepSeekClient(token, deviceId);
                 writeSseHeaders(out);
                 AnthropicSse sse = new AnthropicSse(out, id, req.model,
                         ChatRunner.estimateTokens(req.messages.toString()));
@@ -1007,9 +1095,18 @@ public final class LocalApiServer {
                 return;
             }
 
-            ChatRunner.Result result = ChatRunner.run(req, client, null);
+            ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                @Override
+                public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                }
+            });
             writeJson(out, 200, buildAnthropicResponse(id, req.model, result).toString());
         } catch (DeepSeekClient.ApiException e) {
+            lastErrorKind = e.code == null ? "" : e.code;
+            Logs.e(Logs.HTTP, TAG, "api error: " + e.status + " "
+                    + (e.code == null ? "" : e.code + " ")
+                    + (e.getMessage() == null ? "" : e.getMessage()));
             if (e.status == 401 && token != null) {
                 Accounts.markAuthFailed(token, e.getMessage());
             } else if (e.status == 429 && token != null) {
@@ -1018,7 +1115,12 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                writeJson(out, e.status >= 400 ? e.status : 502, anthropicError(e.status, e.getMessage()));
+                String body = anthropicError(e.status, friendlyMessage(e));
+                if (e.status == 429) {
+                    writeJsonRetry(out, 429, body, 60);
+                } else {
+                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
             try {
@@ -1404,6 +1506,10 @@ public final class LocalApiServer {
             ChatRunner.Result result = ChatRunner.run(req, client, null);
             writeJson(out, 200, buildResponsesResponse(id, req.model, result).toString());
         } catch (DeepSeekClient.ApiException e) {
+            lastErrorKind = e.code == null ? "" : e.code;
+            Logs.e(Logs.HTTP, TAG, "api error: " + e.status + " "
+                    + (e.code == null ? "" : e.code + " ")
+                    + (e.getMessage() == null ? "" : e.getMessage()));
             if (e.status == 401 && token != null) {
                 Accounts.markAuthFailed(token, e.getMessage());
             } else if (e.status == 429 && token != null) {
@@ -1412,8 +1518,12 @@ public final class LocalApiServer {
                 Accounts.markError(token, e.getMessage());
             }
             try {
-                writeJson(out, e.status >= 400 ? e.status : 502,
-                        errJson(e.getMessage(), typeFor(e.status), e.code));
+                String body = errJson(friendlyMessage(e), typeFor(e.status), e.code);
+                if (e.status == 429) {
+                    writeJsonRetry(out, 429, body, 60);
+                } else {
+                    writeJson(out, e.status >= 400 ? e.status : 502, body);
+                }
             } catch (Throwable ignore) { }
         } catch (Throwable t) {
             try {
