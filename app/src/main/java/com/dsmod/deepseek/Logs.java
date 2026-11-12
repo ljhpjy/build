@@ -71,6 +71,16 @@ public final class Logs {
     public static void w(String cat, String tag, String msg, Throwable t) { write("W", cat, tag, msg, t); }
     public static void e(String cat, String tag, String msg) { write("E", cat, tag, msg, null); }
     public static void e(String cat, String tag, String msg, Throwable t) { write("E", cat, tag, msg, t); }
+    /** 当前线程的请求 ID；所有日志自动附带，方便按一次请求串联。 */
+    private static final ThreadLocal<String> TRACE = new ThreadLocal<>();
+
+    public static void setTrace(String trace) {
+        if (trace == null) TRACE.remove(); else TRACE.set(trace);
+    }
+
+    public static void clearTrace() {
+        TRACE.remove();
+    }
     public static void d(String cat, String tag, String msg) { write("D", cat, tag, msg, null); }
 
     private static void write(String level, String cat, String tag, String msg, Throwable t) {
@@ -80,7 +90,9 @@ public final class Logs {
         }
         String safeCat = (cat == null || cat.isEmpty()) ? MAIN : cat;
         String clean = sanitize(msg);
-        String line = time + " " + level + "/" + safeCat + "[" + tag + "]: " + clean;
+        String trace = TRACE.get();
+        String prefix = (trace == null || trace.isEmpty()) ? "" : " " + trace;
+        String line = time + " " + level + "/" + safeCat + "[" + tag + "]" + prefix + ": " + clean;
         if (t != null) {
             line += "\n" + sanitize(Log.getStackTraceString(t));
         }

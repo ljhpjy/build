@@ -164,7 +164,7 @@ public final class Accounts {
                 if (e.cooldownUntil > now) continue;
                 rr = idx + 1;
                 lastPicked = idx;
-                lastPickLabel = "pick #" + (idx + 1) + " of " + n + ": " + mask(e.token);
+                lastPickLabel = "account pick #" + (idx + 1) + "/" + n + " token=" + mask(e.token);
                 e.requests += 1;
                 e.lastUsedAt = now;
                 return e.token;

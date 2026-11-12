@@ -383,6 +383,9 @@ public final class ChatRunner {
             prompt = overflow.prompt;
         }
         result.prompt = prompt;
+        Logs.i(Logs.CHAT, TAG, "prompt built chars=" + prompt.length() + " messages=" + req.messages.size()
+                + " tools=" + (req.tools == null ? 0 : req.tools.size())
+                + " overflow=" + (overflow != null));
 
         List<String> fileIds = new ArrayList<>();
         for (String url : req.imageUrls) {
@@ -460,6 +463,9 @@ public final class ChatRunner {
         }
         result.fabricated = ToolKit.hasFabricatedProtocol(reply.content) || reasoningFabricated;
         result.elapsedMs = System.currentTimeMillis() - start;
+        Logs.i(Logs.CHAT, TAG, "chat done content_chars=" + result.content.length()
+                + " reasoning_chars=" + result.reasoning.length()
+                + " tool_calls=" + result.toolCalls.size() + " elapsed_ms=" + result.elapsedMs);
         return result;
     }
 

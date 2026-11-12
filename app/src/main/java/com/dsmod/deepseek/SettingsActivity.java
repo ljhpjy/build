@@ -140,12 +140,6 @@ public class SettingsActivity extends Activity {
                 openPackage(HOST_PACKAGE);
             }
         });
-        addButton(root, "打开 LSPosed", new Runnable() {
-            @Override
-            public void run() {
-                openPackage("org.lsposed.manager");
-            }
-        });
         addButton(root, "复制 OpenAI base_url", new Runnable() {
             @Override
             public void run() {

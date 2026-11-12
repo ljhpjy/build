@@ -164,10 +164,10 @@ public final class LocalApiServer {
                 rawPath = rawPath.substring(0, q);
             }
             String path = rawPath;
-            REQUESTS.incrementAndGet();
-            // Throttle only upstream /v1/* calls; admin + health stay responsive
-            // even while a chat request is stuck in the upstream engine.
+            // Count and throttle only upstream /v1/* calls; admin + health stay
+            // responsive even while a chat request is stuck in the upstream engine.
             if (path.startsWith("/v1/")) {
+                REQUESTS.incrementAndGet();
                 acquired = gate.tryAcquire(30, java.util.concurrent.TimeUnit.SECONDS);
                 if (!acquired) {
                     writeJson(out, 503, errJson("server busy", "server_error", "busy"));
@@ -177,7 +177,14 @@ public final class LocalApiServer {
             String reqId = "req_" + Long.toHexString(System.currentTimeMillis())
                     + Integer.toHexString((int) (Math.random() * 0xFFFF));
             REQ_ID.set(reqId);
-            logLine = req.method + " " + req.path + " " + reqId;
+            boolean logAccess = path.startsWith("/v1/")
+                    || "/admin".equals(path) || "/admin/".equals(path)
+                    || ("POST".equals(req.method) && path.startsWith("/admin/api/"));
+            Logs.setTrace(reqId);
+            if (logAccess) {
+                logLine = req.method + " " + req.path + " " + reqId;
+                Logs.i(Logs.HTTP, TAG, "recv " + req.method + " " + req.path);
+            }
             startedAt = System.currentTimeMillis();
 
             if ("OPTIONS".equals(req.method)) {
@@ -421,8 +428,9 @@ public final class LocalApiServer {
         } finally {
             if (acquired) gate.release();
             if (logLine != null) {
-                log(Logs.HTTP, logLine + " " + (System.currentTimeMillis() - startedAt) + "ms");
+                log(Logs.HTTP, "done " + logLine + " elapsed_ms=" + (System.currentTimeMillis() - startedAt));
             }
+            Logs.clearTrace();
             REQ_ID.remove();
             try { socket.close(); } catch (Throwable ignore) { }
         }

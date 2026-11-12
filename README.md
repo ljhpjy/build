@@ -161,6 +161,55 @@ curl -N http://127.0.0.1:8765/v1/messages \
 | 413 | 上下文过长 | `code:"prompt_too_long"` |
 
 多账号：同一请求内遇到 401/429/5xx 会自动换下一个号重试（fuckds 行为）；命中限流的号冷却 60s。单账号命中限流时立即返回 429 + `Retry-After: 60`，不傻等。默认并发 1（与 fuckds `CONCURRENCY=1` 一致），管理接口不受并发闸门影响。
+
+### PoW 求解
+
+以下结论来自 **DeepSeek 2.7.5 新版 App 的 smali 分析**（不是照抄旧版模块）：
+
+- `ServerChatChallenge`（Kotlin 序列化器 `Lrs9`）字段：`algorithm, challenge, salt, signature, difficulty, expire_at, expire_after, target_path`。
+- 请求头 payload `AuthedPowSolution`（序列化器 `Lff0`）字段：`algorithm, challenge, salt, signature, answer, target_path`（base64 后作为 `X-DS-PoW-Response`）。
+- 官方求解（`Lcf0.z`）调用 `PowCalculator.calculateDeepSeekHashV1Pow(prefix, challenge, difficulty)`，其中 **`prefix = salt + "_" + expire_at + "_"`**；`PowCalculator.a(J,S,S)` 的 smali 为 `native(p3, p4, p1)`，因此等价调用是 **`a(difficulty, prefix, challenge)`**。
+- 模块默认直接调用宿主该方法（`Config.powNative=true`），带 1.5s 超时；超时后本次运行禁用原生并回退纯 Java（同样输入 `salt_expire_at_nonce`，前 3 字节为 0 即答案）。
+- 原生答案会用 Java 算法交叉校验：日志 `pow verify ok` / `pow verify mismatch hash=…`。
+
+### 请求统计与日志降噪
+
+- `/healthz` 的 `requests` 只统计 `/v1/*` 上游请求，`/admin`、`/healthz` 及后台轮询不计入。
+- 访问日志只记录 `/v1/*`、`/admin` 页面和 POST 管理操作，轮询不再刷屏。
+
+### 一次聊天请求的完整日志（示例）
+
+日志采用 logcat 风格：`时间 级别/分类[模块]: rid=请求ID 事件 键=值`。每条都带同一个 `rid=`，搜索 `rid=` 即可串联一次请求：
+
+```
+10:01:02 I/HTTP[DSMOD]: rid=req_1a2b recv POST /v1/chat/completions
+10:01:02 I/ACCOUNT[DSMOD]: rid=req_1a2b account pick #1/1 token=Dbr3****OAIv
+10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b coldstart ok
+10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b session created id=<session-id>
+10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b challenge ok difficulty=144000 expire_at=1763000000000
+10:01:03 D/UPSTREAM[DSMOD]: rid=req_1a2b pow native start challenge_len=64 challenge_head=3f9a2b1c salt_len=16 expire_at=1763000000000 difficulty=144000
+10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b pow verify ok
+10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b pow native ok answer=12345 elapsed_ms=28
+10:01:04 I/CHAT[DSMOD]: rid=req_1a2b prompt built chars=420 messages=3 tools=0 overflow=false
+10:01:04 I/UPSTREAM[DSMOD]: rid=req_1a2b completion req prompt_chars=420 thinking=true search=false files=0
+10:01:04 I/UPSTREAM[DSMOD]: rid=req_1a2b completion tx waiting_rx
+10:01:05 I/UPSTREAM[DSMOD]: rid=req_1a2b completion rx http=200 content_type=text/event-stream
+10:01:05 I/UPSTREAM[DSMOD]: rid=req_1a2b stream progress fragments=3
+10:01:07 I/UPSTREAM[DSMOD]: rid=req_1a2b completion done content_chars=1800 reasoning_chars=400 ttft_ms=1200 total_ms=3200
+10:01:07 I/CHAT[DSMOD]: rid=req_1a2b chat done content_chars=1800 reasoning_chars=400 tool_calls=0 elapsed_ms=3300
+10:01:07 I/HTTP[DSMOD]: rid=req_1a2b done POST /v1/chat/completions elapsed_ms=3400
+```
+
+**排障定位**（看最后一条停在哪里）：
+
+| 最后一条 | 结论 |
+|---|---|
+| `recv …` | 请求已进入，但业务未开始（并发排队 / 无线程） |
+| `completion tx waiting_rx` | 已发出，上游不响应（网络 / 风控），120s 后报 `completion error` |
+| `stream progress` 中断 | 上游断流，报 `stream_failed` |
+| `completion rx http=429` | 上游限流（`rate_limited`） |
+| `completion rx http=401` | 登录失效（`auth_expired`） |
+| `pow native timeout` / `pow java exhausted` | PoW 失败（参数 / 算法异常） |
 鉴权：`dsmod_config.json` 里的 `apiKey` 非空时要求 `Authorization: Bearer <key>` 或 `x-api-key: <key>`。
 
 ---

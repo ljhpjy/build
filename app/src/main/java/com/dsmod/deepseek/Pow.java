@@ -1,7 +1,6 @@
 package com.dsmod.deepseek;
 
 import android.util.Base64;
-import android.util.Log;
 
 import org.json.JSONObject;
 
@@ -12,17 +11,15 @@ import java.nio.charset.StandardCharsets;
 /**
  * DeepSeekHashV1 PoW solver.
  *
- * DeepSeekHashV1 = SHA3-256 with Keccak-f[1600] round 0 skipped:
- * rate=136, padding 0x06 + 0x80, 32-byte output, state lane order
- * index = x + 5*y (column major, the reference Keccak layout).
+ * Answer rule (same as fuckds): digest input is
+ * salt + "_" + expireAt + "_" + nonce, hashed with SHA3-256
+ * (Keccak-f[1600], rate 136, padding 0x06/0x80) and the first three
+ * bytes of the digest must be zero. The server challenge is NOT part of
+ * the digest input; it only goes into the signed header.
  *
- * Fast path: the host app ships the very same hash as a Rust native
- * library (librscrypto.so) behind
- * com.deepseek.crypto.PowCalculator#a(expireAt, challenge, salt).
- * We are injected into the host process, so reflection gives us the
- * native solver with no extra .so to ship. The pure Java solver below
- * is the full standalone implementation and is used when the host
- * class is missing (other app versions / unit tests).
+ * The host Rust solver behind PowCalculator#a(expireAt, challenge, salt)
+ * is opt-in (Config.powNative) because some builds hang inside JNI; the
+ * pure Java solver is the default and has no external dependency.
  */
 public final class Pow {
     private static final String TAG = "DSMOD";
@@ -48,6 +45,8 @@ public final class Pow {
     };
 
     private static final int DEFAULT_DIFFICULTY = 144000;
+    /** 一次 JNI 超时后禁用原生，避免每个请求都泄漏一个死循环线程。 */
+    private static volatile boolean nativeDisabled = false;
 
     private Pow() {}
 
@@ -60,6 +59,11 @@ public final class Pow {
         long[] c = new long[5];
         long[] d = new long[5];
         long[] b = new long[25];
+        keccakF23Buf(s, c, d, b);
+    }
+
+    /** Same permutation with caller-provided scratch buffers (no per-call allocation). */
+    private static void keccakF23Buf(long[] s, long[] c, long[] d, long[] b) {
         for (int r = 1; r < 24; r++) {
             for (int x = 0; x < 5; x++) {
                 c[x] = s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20];
@@ -104,8 +108,8 @@ public final class Pow {
         for (int i = 0; i < 8; i++) out[off + i] = (byte) (v >>> (8 * i));
     }
 
-    private static void absorb(long[] s, byte[] block33, int off) {
-        for (int i = 0; i < RATE / 8; i++) s[i] ^= le64(block33, off + i * 8);
+    private static void absorb(long[] s, byte[] block, int off) {
+        for (int i = 0; i < RATE / 8; i++) s[i] ^= le64(block, off + i * 8);
     }
 
     public static byte[] hashV1(byte[] data) {
@@ -147,16 +151,47 @@ public final class Pow {
     }
 
     /**
-     * Try the host native solver first (Rust, ~20ms for 144k),
-     * then fall back to pure Java.
+     * Solve the challenge: optional bounded native attempt, then pure Java.
+     * Returns -1 only when no nonce below difficulty matches.
      */
     public static long solve(String challengeHex, String salt, long expireAtNet, long difficulty) {
-        long viaHost = solveNative(challengeHex, salt, expireAtNet);
-        if (viaHost >= 0) return viaHost;
-        return solveJava(challengeHex, salt, expireAtNet, difficulty);
+        long t0 = System.currentTimeMillis();
+        if (Config.powNative && !nativeDisabled) {
+            Logs.d(Logs.UPSTREAM, TAG, "pow native start challenge_len=" + challengeHex.length()
+                    + " challenge_head=" + prefix8(challengeHex) + " salt_len=" + salt.length()
+                    + " expire_at=" + expireAtNet + " difficulty=" + difficulty);
+            long viaHost = solveNative(challengeHex, salt, expireAtNet, difficulty);
+            if (viaHost >= 0) {
+                verifyNativeAnswer(salt, expireAtNet, viaHost);
+                Logs.i(Logs.UPSTREAM, TAG, "pow native ok answer=" + viaHost
+                        + " elapsed_ms=" + (System.currentTimeMillis() - t0));
+                return viaHost;
+            }
+            Logs.w(Logs.UPSTREAM, TAG, "pow native failed, fallback=java");
+        }
+        long answer = solveJava(challengeHex, salt, expireAtNet, difficulty);
+        Logs.i(Logs.UPSTREAM, TAG, "pow java done answer=" + answer
+                + " elapsed_ms=" + (System.currentTimeMillis() - t0));
+        return answer;
     }
 
-    private static long solveNative(String challengeHex, String salt, long expireAtNet) {
+    private static String prefix8(String s) {
+        return s.length() <= 8 ? s : s.substring(0, 8);
+    }
+
+    /** 用纯 Java 算法校验宿主答案，顺手验证两边算法是否一致。 */
+    private static void verifyNativeAnswer(String salt, long expireAt, long answer) {
+        try {
+            byte[] chk = hashV1((salt + "_" + expireAt + "_" + answer)
+                    .getBytes(StandardCharsets.UTF_8));
+            boolean ok = chk[0] == 0 && chk[1] == 0 && chk[2] == 0;
+            Logs.i(Logs.UPSTREAM, TAG, "pow verify " + (ok ? "ok" : "mismatch hash=" + hex(chk)));
+        } catch (Throwable ignore) { }
+    }
+
+    /** Native call is bounded: a hung JNI must never block the request thread. */
+    private static long solveNative(String challengeHex, String salt, long expireAtNet, long difficulty) {
+        final long[] result = {-1L};
         try {
             Class<?> c = Host.forName("com.deepseek.crypto.PowCalculator");
             Object inst;
@@ -168,24 +203,49 @@ public final class Pow {
                 inst = c.getDeclaredConstructor().newInstance();
             }
             if (inst == null) return -1L;
-            Method m = c.getMethod("a", long.class, String.class, String.class);
+            final Object target = inst;
+            final Method m = c.getMethod("a", long.class, String.class, String.class);
             m.setAccessible(true);
-            Object ans = m.invoke(inst, expireAtNet, challengeHex, salt);
-            if (ans instanceof Number) {
-                long n = ((Number) ans).longValue();
-                return n >= 0 ? n : -1L;
+            // Host semantics (smali-verified): a(difficulty, prefix, challenge)
+            // -> nativeCalculateDeepSeekHashV1Pow(prefix, challenge, difficulty)
+            //    prefix = salt + "_" + expire_at + "_"
+            final String prefix = salt + "_" + expireAtNet + "_";
+            final String challenge = challengeHex;
+            final long diff = difficulty;
+            Thread worker = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Object ans = m.invoke(target, diff, prefix, challenge);
+                        if (ans instanceof Number) {
+                            long n = ((Number) ans).longValue();
+                            if (n >= 0) result[0] = n;
+                        }
+                    } catch (Throwable t) {
+                        Logs.w(Logs.UPSTREAM, TAG, "pow native error: " + t);
+                    }
+                }
+            }, "dsmod-pow-native");
+            worker.setDaemon(true);
+            worker.start();
+            worker.join(1500L);
+            if (worker.isAlive()) {
+                nativeDisabled = true;
+                Logs.w(Logs.UPSTREAM, TAG, "pow native timeout=1500ms, native disabled for this run, fallback=java");
+                return -1L;
             }
         } catch (Throwable t) {
-            Logs.d(Logs.UPSTREAM, TAG, "host PowCalculator unavailable: " + t);
+            Logs.d(Logs.UPSTREAM, TAG, "pow native unavailable: " + t);
         }
-        return -1L;
+        return result[0];
     }
 
     /**
      * Pure Java search over [0, difficulty).
      *
-     * Prefix block is absorbed once; each nonce only fills the trailing
-     * decimal digits plus 0x06/0x80 padding into one 136-byte block.
+     * Prefix (salt_expireAt_) is absorbed once; each nonce only refills the
+     * trailing decimal digits plus 0x06/0x80 padding into a reusable 136-byte
+     * block, and scratch arrays are reused so the hot loop does not allocate.
      */
     public static long solveJava(String challengeHex, String salt, long expireAt, long difficulty) {
         long diff = difficulty <= 0 ? DEFAULT_DIFFICULTY : difficulty;
@@ -203,27 +263,41 @@ public final class Pow {
         byte[] tail = new byte[tailLen];
         System.arraycopy(prefix, off, tail, 0, tailLen);
 
+        long[] st = new long[25];
+        long[] c = new long[5];
+        long[] d = new long[5];
+        long[] b = new long[25];
         byte[] buf = new byte[RATE];
+        byte[] digits = new byte[20];
+
         for (long n = 0; n < diff; n++) {
-            String digits = Long.toString(n);
-            int dLen = digits.length();
-            if (tailLen + dLen + 1 > RATE) continue;
+            int dLen = 1;
+            long v = n;
+            while (v >= 10) { dLen++; v /= 10; }
+            v = n;
+            for (int i = dLen - 1; i >= 0; i--) {
+                digits[i] = (byte) ('0' + (v % 10));
+                v /= 10;
+            }
+            int pad = tailLen + dLen;
+            if (pad >= RATE) continue;
             System.arraycopy(tail, 0, buf, 0, tailLen);
-            for (int i = 0; i < dLen; i++) buf[tailLen + i] = (byte) digits.charAt(i);
-            buf[tailLen + dLen] = 0x06;
-            buf[RATE - 1] |= (byte) 0x80;
+            System.arraycopy(digits, 0, buf, tailLen, dLen);
+            buf[pad] = 0x06;
+            if (pad == RATE - 1) {
+                buf[pad] = (byte) 0x86;
+            } else {
+                buf[RATE - 1] = (byte) 0x80;
+            }
 
-            long[] st = base.clone();
+            System.arraycopy(base, 0, st, 0, 25);
             for (int i = 0; i < RATE / 8; i++) st[i] ^= le64(buf, i * 8);
-            keccakF23(st);
+            keccakF23Buf(st, c, d, b);
 
-            byte[] out = new byte[32];
-            putLe64(out, 0, st[0]);
-            putLe64(out, 8, st[1]);
-            putLe64(out, 16, st[2]);
-            putLe64(out, 24, st[3]);
-            if (challengeHex.equalsIgnoreCase(hex(out))) return n;
+            // Answer rule: first 3 bytes of the digest are zero.
+            if ((st[0] & 0xFFFFFFL) == 0L) return n;
         }
+        Logs.w(Logs.UPSTREAM, TAG, "pow java exhausted difficulty=" + diff);
         return -1L;
     }
 

@@ -34,6 +34,9 @@ public final class Config {
     /** 上游并发上限（Semaphore）；fuckds 默认并发 1，更保守、更少风控。 */
     public static int concurrency = 1;
 
+    /** 是否尝试宿主原生 PoW（部分版本会在 JNI 内卡死，默认关闭，纯 Java 求解）。 */
+    public static boolean powNative = true;
+
     /** 单次上游请求总超时。 */
     public static long requestTimeoutMs = 240_000L;
     /** 单账号限流冷却。 */

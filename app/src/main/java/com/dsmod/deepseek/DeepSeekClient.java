@@ -95,7 +95,7 @@ public final class DeepSeekClient {
         if (id.isEmpty()) {
             throw new ApiException(502, "create session failed: " + msgOf(parse(text), text), "session_failed");
         }
-        Logs.d(Logs.UPSTREAM, TAG, "session created");
+        Logs.i(Logs.UPSTREAM, TAG, "session created id=" + id);
         return id;
     }
 
@@ -159,7 +159,7 @@ public final class DeepSeekClient {
         if (c.challenge.isEmpty() || c.salt.isEmpty()) {
             throw new ApiException(502, "pow challenge missing fields", "pow_challenge_failed");
         }
-        Logs.d(Logs.UPSTREAM, TAG, "challenge fetched");
+        Logs.i(Logs.UPSTREAM, TAG, "challenge ok difficulty=" + c.difficulty + " expire_at=" + c.expireAt);
         return c;
     }
 
@@ -198,8 +198,8 @@ public final class DeepSeekClient {
             throw new ApiException(400, "build completion body failed: " + t, "invalid_request");
         }
 
-        Logs.i(Logs.UPSTREAM, TAG, "completion start: promptChars=" + prompt.length()
-                + " thinking=" + thinking + " search=" + search + " files=" + (refFileIds == null ? 0 : refFileIds.size()));
+        Logs.i(Logs.UPSTREAM, TAG, "completion req prompt_chars=" + prompt.length() + " thinking=" + thinking
+                + " search=" + search + " files=" + (refFileIds == null ? 0 : refFileIds.size()));
         boolean powRetried = false;
         int apiRetries = 0;
         int emptyRetries = 0;
@@ -210,14 +210,18 @@ public final class DeepSeekClient {
                 conn = open(PATH_COMPLETION);
                 conn.setRequestProperty("x-ds-pow-response", pow);
                 writeBody(conn, body.toString());
+                Logs.i(Logs.UPSTREAM, TAG, "completion tx waiting_rx");
                 int code = conn.getResponseCode();
                 String contentType = String.valueOf(conn.getContentType());
+                Logs.i(Logs.UPSTREAM, TAG, "completion rx http=" + code + " content_type=" + contentType);
 
                 if (code != 200 || !contentType.contains("event-stream")) {
                     String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
                     JSONObject root = parse(text);
                     String message = msgOf(root, text);
                     int bizCode = root == null ? 0 : root.optInt("code", 0);
+                    Logs.w(Logs.UPSTREAM, TAG, "completion error http=" + code + " biz_code=" + bizCode
+                            + " msg=" + (message.isEmpty() ? "<empty>" : message));
 
                     if ((bizCode == 40301 || message.toUpperCase().contains("POW")) && !powRetried) {
                         powRetried = true;
@@ -268,7 +272,13 @@ public final class DeepSeekClient {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
+            long lastProgress = 0L;
             while ((line = reader.readLine()) != null) {
+                long now = System.currentTimeMillis();
+                if (now - lastProgress >= 3000L) {
+                    lastProgress = now;
+                    Logs.i(Logs.UPSTREAM, TAG, "stream progress fragments=" + state.fragments.size());
+                }
                 if (line.isEmpty()) {
                     if (data.length() > 0) {
                         handleFrame(state, event, data.toString().trim());
@@ -294,9 +304,10 @@ public final class DeepSeekClient {
         reply.reasoning = collect(state, "THINK");
         reply.usage = state.usage;
         reply.firstTokenMs = state.firstTokenAt > 0 ? state.firstTokenAt - t0 : -1;
-        Logs.i(Logs.UPSTREAM, TAG, "completion done: content=" + reply.content.length()
-                + " reasoning=" + reply.reasoning.length()
-                + " ms=" + (System.currentTimeMillis() - t0));
+        Logs.i(Logs.UPSTREAM, TAG, "completion done content_chars=" + reply.content.length()
+                + " reasoning_chars=" + reply.reasoning.length()
+                + " ttft_ms=" + (reply.firstTokenMs >= 0 ? reply.firstTokenMs : -1)
+                + " total_ms=" + (System.currentTimeMillis() - t0));
         return reply;
     }
 
@@ -537,9 +548,9 @@ public final class DeepSeekClient {
             device.put("device_id", deviceId);
             device.put("device_model", "");
             post("/api/v0/users/auth_token/check_device", device);
-            Logs.d(Logs.UPSTREAM, TAG, "cold start sequence done");
+            Logs.i(Logs.UPSTREAM, TAG, "coldstart ok");
         } catch (Throwable t) {
-            Logs.w(Logs.UPSTREAM, TAG, "cold start failed (ignored): " + t);
+            Logs.w(Logs.UPSTREAM, TAG, "coldstart failed (ignored): " + t);
         }
     }
 

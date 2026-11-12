@@ -40,9 +40,9 @@ h1 em{font-style:normal;background:linear-gradient(90deg,var(--cyan),var(--viole
 .card h2{margin:0 0 12px;font-size:12px;font-weight:600;letter-spacing:1.2px;color:var(--muted);text-transform:uppercase}
 .metric{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
 .metric small{font-size:12px;font-weight:400;color:var(--muted);margin-left:4px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{color:var(--muted);font-weight:500;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
-td{padding:9px 10px;border-bottom:1px solid rgba(122,182,255,.08)}
+table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto}
+th{color:var(--muted);font-weight:500;text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);white-space:normal}
+td{padding:9px 8px;border-bottom:1px solid rgba(122,182,255,.08);white-space:normal;word-break:break-all;vertical-align:top}
 tbody tr:hover td{background:rgba(34,211,238,.05)}
 .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;border:1px solid var(--line)}
 .tag.ok{color:var(--green);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1)}
