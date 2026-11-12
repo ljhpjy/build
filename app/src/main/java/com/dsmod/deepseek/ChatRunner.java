@@ -383,8 +383,9 @@ public final class ChatRunner {
             prompt = overflow.prompt;
         }
         result.prompt = prompt;
-        Logs.i(Logs.CHAT, TAG, "prompt built chars=" + prompt.length() + " messages=" + req.messages.size()
-                + " tools=" + (req.tools == null ? 0 : req.tools.size())
+        Logs.i(Logs.CHAT, TAG, "prompt built chars=" + prompt.length()
+                + " messages=" + (req.messages == null ? 0 : req.messages.length())
+                + " tools=" + (req.tools == null ? 0 : req.tools.length())
                 + " overflow=" + (overflow != null));
 
         List<String> fileIds = new ArrayList<>();
