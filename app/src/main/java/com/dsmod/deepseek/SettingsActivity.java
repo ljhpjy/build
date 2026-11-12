@@ -71,6 +71,13 @@ public class SettingsActivity extends Activity {
             }
         });
 
+        addButton(root, "打开 LSPosed", new Runnable() {
+            @Override
+            public void run() {
+                openPackage("org.lsposed.manager");
+            }
+        });
+
         addButton(root, "复制 OpenAI base_url", new Runnable() {
             @Override
             public void run() {
@@ -188,7 +195,13 @@ public class SettingsActivity extends Activity {
             }
             return "● 进程已启动，接口返回 HTTP " + code;
         } catch (Throwable t) {
-            return "○ 未运行\n请确认：LSPosed 已启用本模块、作用域勾选 com.deepseek.chat，并打开过 DeepSeek 完成登录。";
+            return "○ 未运行\n"
+                    + "排查顺序：\n"
+                    + "  1. LSPosed → 模块 → 启用「DeepSeek 本地API」\n"
+                    + "  2. 点击模块 → 作用域 → 勾选「DeepSeek」\n"
+                    + "  3. 强制停止 DeepSeek 后重新打开（保持后台）\n"
+                    + "  4. LSPosed → 日志 → 搜索 DSMOD\n"
+                    + "  5. 若日志无 DSMOD：APK 内 assets/xposed_init 可能缺失";
         } finally {
             if (conn != null) conn.disconnect();
         }
@@ -212,6 +225,20 @@ public class SettingsActivity extends Activity {
                 startActivity(intent);
             } else {
                 Toast.makeText(this, "未安装 DeepSeek", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable t) {
+            Toast.makeText(this, "打开失败", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void openPackage(String packageName) {
+        try {
+            Intent intent = getPackageManager().getLaunchIntentForPackage(packageName);
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } else {
+                Toast.makeText(this, "未安装 " + packageName, Toast.LENGTH_SHORT).show();
             }
         } catch (Throwable t) {
             Toast.makeText(this, "打开失败", Toast.LENGTH_SHORT).show();
