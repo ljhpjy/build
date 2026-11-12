@@ -381,7 +381,7 @@ public final class ToolKit {
             // still stream. Keep a short tail that may start a protocol tag;
             // a large pending buffer (pathological single line) is released too.
             if (!droppingDsml && pending.length() > 64) {
-                boolean safe = pending.indexOf('<') < 0 || pending.length() > 4096;
+                boolean safe = pending.indexOf("<") < 0 || pending.length() > 4096;
                 if (safe) {
                     int cut = pending.length() - 16;
                     out.append(pending, 0, cut);

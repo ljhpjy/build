@@ -24,6 +24,7 @@ public final class Notifier {
 
     private Notifier() {}
 
+    @SuppressWarnings("deprecation")
     public static void show(Context context) {
         try {
             Context app = context.getApplicationContext();
