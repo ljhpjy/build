@@ -174,6 +174,15 @@ public class SettingsActivity extends Activity {
     }
 
     private String fetchHealth() {
+        if (!portOpen()) {
+            return "○ 未运行（端口 " + Config.port + " 未监听）\n"
+                    + "排查顺序：\n"
+                    + "  1. LSPosed → 模块 → 启用「DeepSeek 本地API」\n"
+                    + "  2. 点击模块 → 作用域 → 勾选「DeepSeek」\n"
+                    + "  3. 强制停止 DeepSeek 后重新打开（保持后台）\n"
+                    + "  4. LSPosed → 日志 → 搜索 DSMOD\n"
+                    + "  5. 若日志无 DSMOD：APK 内 assets/xposed_init 可能缺失";
+        }
         HttpURLConnection conn = null;
         try {
             URL url = new URL("http://127.0.0.1:" + Config.port + "/healthz");
@@ -193,17 +202,29 @@ public class SettingsActivity extends Activity {
                 if (body.length() > 240) body = body.substring(0, 240) + "...";
                 return "● 运行中（HTTP 200）\n" + body;
             }
-            return "● 进程已启动，接口返回 HTTP " + code;
+            return "● 端口已监听，接口返回 HTTP " + code;
         } catch (Throwable t) {
-            return "○ 未运行\n"
-                    + "排查顺序：\n"
-                    + "  1. LSPosed → 模块 → 启用「DeepSeek 本地API」\n"
-                    + "  2. 点击模块 → 作用域 → 勾选「DeepSeek」\n"
-                    + "  3. 强制停止 DeepSeek 后重新打开（保持后台）\n"
-                    + "  4. LSPosed → 日志 → 搜索 DSMOD\n"
-                    + "  5. 若日志无 DSMOD：APK 内 assets/xposed_init 可能缺失";
+            // Port is open but HTTP failed: usually this app's cleartext policy.
+            return "● 端口已监听（HTTP 探测失败：" + t.getClass().getSimpleName()
+                    + (t.getMessage() == null ? "" : ": " + t.getMessage()) + "）";
         } finally {
             if (conn != null) conn.disconnect();
+        }
+    }
+
+    /** TCP connect probe: independent of the cleartext HTTP policy. */
+    private boolean portOpen() {
+        java.net.Socket socket = null;
+        try {
+            socket = new java.net.Socket();
+            socket.connect(new java.net.InetSocketAddress("127.0.0.1", Config.port), 1500);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (socket != null) {
+                try { socket.close(); } catch (Throwable ignore) { }
+            }
         }
     }
 

@@ -24,7 +24,7 @@
 - **文件日志**：`files/dsmod_api.log`（512KB 滚动），可通过 `GET /admin/api/logs` 读取
 - **冷启动序列**：进程内每账号跑一次 settings / check_device，降低"非网页"画像
 - **人类输入停顿**：发送前 120–480ms 随机延迟（`humanTiming`）
-- **`/admin` 控制台**：浏览器打开 `http://0.0.0.0:8765/admin` 查看状态 / 号池（可编辑保存）/ 配置 / 日志；填 API key 后自动带上鉴权
+- **`/admin` 控制台**：浏览器打开 `http://127.0.0.1:8765/admin` 查看状态 / 号池（可编辑保存）/ 配置 / 日志；填 API key 后自动带上鉴权
 - **历史工具调用只写 JSON 行**（`## Tool_calls`），绝不回写 DSML，模型没有可照抄的样板
 - **工具结果独立成段**（`## Tool_call_result`），不并进 `## Assistant`
 - **RESULT 只清洗不打断**：模型自造的工具结果从正文中剔除，不中止生成
@@ -96,14 +96,14 @@ gradle :app:assembleRelease
 1. 安装模块 APK；
 2. 在 LSPosed 中启用，作用域勾选 **com.deepseek.chat**；
 3. 打开 DeepSeek 官方 App 并登录；
-4. 服务在宿主进程内监听 `0.0.0.0:8765`（所有网卡，局域网可访问；可用 `dsmod_config.json` 改）；本机客户端直接连 `http://0.0.0.0:8765`，局域网设备用手机 IP；
-5. OpenAI 客户端：`base_url = http://0.0.0.0:8765/v1`
-   Anthropic 客户端：`base_url = http://0.0.0.0:8765`
+4. 服务在宿主进程内监听 `0.0.0.0:8765`（所有网卡，局域网可访问；可用 `dsmod_config.json` 改）；本机客户端直接连 `http://127.0.0.1:8765`，局域网设备用手机 IP；
+5. OpenAI 客户端：`base_url = http://127.0.0.1:8765/v1`
+   Anthropic 客户端：`base_url = http://127.0.0.1:8765`
 
 ```bash
-curl http://0.0.0.0:8765/healthz
+curl http://127.0.0.1:8765/healthz
 
-curl -N http://0.0.0.0:8765/v1/chat/completions \
+curl -N http://127.0.0.1:8765/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek-v4.1-flash-1017",
@@ -111,7 +111,7 @@ curl -N http://0.0.0.0:8765/v1/chat/completions \
     "messages": [{"role":"user","content":"用一句话解释什么是 QUIC"}]
   }'
 
-curl -N http://0.0.0.0:8765/v1/messages \
+curl -N http://127.0.0.1:8765/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: any" \
   -d '{
@@ -243,7 +243,7 @@ curl -N http://0.0.0.0:8765/v1/messages \
 ## 账号池（多账号轮询）
 
 - **登录即入池**：打开 DeepSeek 官方 App 登录后，模块反射 MMKV 的 `key_user_info` 自动取到 token，放在号池第 1 位（★ 标记）。**无需在模块里再登录**。
-- **添加更多账号**：在 `http://0.0.0.0:8765/admin` 的 Accounts 区粘贴 userToken 点「添加」；接口 `POST /admin/api/accounts/add {"token":"..."}`。
+- **添加更多账号**：在 `http://127.0.0.1:8765/admin` 的 Accounts 区粘贴 userToken 点「添加」；接口 `POST /admin/api/accounts/add {"token":"..."}`。
 - **整体替换**：面板 textarea 一行一个 →「整体替换」；接口 `POST /admin/api/accounts {"mode":"replace","tokens":[...]}`。
 - **删除**：面板每行「删除」；接口 `POST /admin/api/accounts/remove {"index":1}`（1 起）。
 - **验证登录态**：「验证全部」逐个调 `GET /api/v0/users/current`；接口 `POST /admin/api/accounts/verify`，返回 `{valid,total,results:[{index,ok,detail}]}`。

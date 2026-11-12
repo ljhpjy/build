@@ -112,6 +112,22 @@ public class Main implements IXposedHookLoadPackage {
         }
     }
 
+    /** In-process TCP self-check: proves the socket really listens on 127.0.0.1. */
+    private static boolean probePort(int port) {
+        java.net.Socket socket = null;
+        try {
+            socket = new java.net.Socket();
+            socket.connect(new java.net.InetSocketAddress("127.0.0.1", port), 1200);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (socket != null) {
+                try { socket.close(); } catch (Throwable ignore) { }
+            }
+        }
+    }
+
     private static synchronized void bootstrap(String source, Context context) {
         if (bootstrapped) return;
         bootstrapped = true;
@@ -126,8 +142,9 @@ public class Main implements IXposedHookLoadPackage {
                     Accounts.init(host);
                     LocalApiServer.ensureStarted(host);
                     Notifier.show(host);
+                    boolean portOpen = probePort(Config.port);
                     xlog("bootstrap done: running=" + LocalApiServer.isRunning()
-                            + " port=" + Config.port);
+                            + " portOpen=" + portOpen + " port=" + Config.port);
                 } catch (Throwable t) {
                     xerr("bootstrap failed", t);
                 }
