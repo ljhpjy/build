@@ -27,6 +27,8 @@ import java.util.List;
  * to imitate inside the conversation.
  */
 public final class Prompt {
+    private static final String TAG = "DSMOD";
+
     public static final String PROMPT_HEADER = "# Messages:";
     public static final String SEC_SYSTEM = "## System";
     public static final String SEC_TOOLS = "## Tools";
@@ -215,12 +217,17 @@ Output discipline:
         for (String line : toolLines) toolChars += line.length() + 1;
         // Same intent as fuckds toolDeclMode=auto: keep the declarations inside
         // the body instead of letting them crowd out the conversation.
-        int compactAt = Math.max(8_000, Config.maxPromptChars / 2);
+        // Reserve room for the conversation instead of compacting at half the
+        // limit: with MAX_PROMPT_CHARS=1.65M a 70-tool schema (tens of KB) still
+        // fits, and compacting it throws away parameter descriptions the model
+        // needs in order to pick the right tool.
+        int compactAt = (int) Math.max(200_000L, Config.maxPromptChars - 300_000L);
         if (toolChars > compactAt) {
             List<String> compact = renderCompactToolDeclarations(tools);
             if (!compact.isEmpty()) {
                 toolLines = compact;
-                Logs.d(Logs.CONFIG, "PROMPT", "tool decls compacted lines=" + compact.size());
+                Logs.d(Logs.CONFIG, TAG, "tool decls compacted lines=" + compact.size()
+                        + " full_chars=" + toolChars + " compact_at=" + compactAt);
             }
         }
         if (!toolLines.isEmpty()) {

@@ -195,14 +195,27 @@ public final class Accounts {
         synchronized (LOCK) {
             long now = System.currentTimeMillis();
             int n = POOL.size();
+            // Why the other accounts were passed over: "pick #2/3" alone cannot
+            // tell an expired token from a cooling one.
+            StringBuilder skip = new StringBuilder();
             for (int i = 0; i < n; i++) {
                 int idx = (rr + i) % n;
                 Entry e = POOL.get(idx);
-                if (e.authFailed) continue;
-                if (e.cooldownUntil > now) continue;
+                if (e.authFailed) {
+                    if (skip.length() > 0) skip.append(' ');
+                    skip.append('#').append(idx + 1).append(":authFailed");
+                    continue;
+                }
+                if (e.cooldownUntil > now) {
+                    if (skip.length() > 0) skip.append(' ');
+                    skip.append('#').append(idx + 1)
+                            .append(":cooldown").append((e.cooldownUntil - now) / 1000L).append('s');
+                    continue;
+                }
                 rr = idx + 1;
                 lastPicked = idx;
-                lastPickLabel = "account pick #" + (idx + 1) + "/" + n + " token=" + mask(e.token);
+                lastPickLabel = "account pick #" + (idx + 1) + "/" + n + " token=" + mask(e.token)
+                        + (skip.length() > 0 ? " skip=[" + skip + "]" : "");
                 e.requests += 1;
                 e.lastUsedAt = now;
                 return e.token;

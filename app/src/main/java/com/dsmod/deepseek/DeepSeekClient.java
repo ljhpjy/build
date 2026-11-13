@@ -132,8 +132,7 @@ public final class DeepSeekClient {
                 Thread.sleep(90L - elapsed + (long) (Math.random() * 60.0));
             } catch (InterruptedException ignored) { }
         }
-        Logs.d(Logs.UPSTREAM, TAG, "pow solved in " + (System.currentTimeMillis() - begin)
-                + "ms difficulty=" + c.difficulty);
+        // Pow.solve already reported answer + elapsed + solver; do not repeat it.
         Solved solved = new Solved();
         solved.header = Pow.buildHeader(c.algorithm, c.challenge, c.salt, answer, c.signature, c.targetPath);
         solved.expireAt = c.expireAt;
@@ -215,14 +214,17 @@ public final class DeepSeekClient {
         boolean powRetried = false;
         int apiRetries = 0;
         int emptyRetries = 0;
+        int attempt = 0;
 
         while (true) {
+            attempt++;
             HttpURLConnection conn = null;
             try {
                 conn = open(PATH_COMPLETION);
                 conn.setRequestProperty("x-ds-pow-response", pow);
                 writeBody(conn, body.toString());
-                Logs.i(Logs.UPSTREAM, TAG, "completion tx waiting_rx");
+                Logs.i(Logs.UPSTREAM, TAG, "completion tx attempt=" + attempt
+                        + " retries=" + (apiRetries + emptyRetries + (powRetried ? 1 : 0)));
                 int code = conn.getResponseCode();
                 String contentType = String.valueOf(conn.getContentType());
                 Logs.i(Logs.UPSTREAM, TAG, "completion rx http=" + code + " content_type=" + contentType);
@@ -237,6 +239,7 @@ public final class DeepSeekClient {
 
                     if ((bizCode == 40301 || message.toUpperCase().contains("POW")) && !powRetried) {
                         powRetried = true;
+                        Logs.w(Logs.UPSTREAM, TAG, "completion retry reason=pow biz_code=" + bizCode);
                         pow = powHeader(PATH_COMPLETION);
                         continue;
                     }
@@ -248,6 +251,8 @@ public final class DeepSeekClient {
                     }
                     apiRetries += 1;
                     if (apiRetries <= 3) {
+                        Logs.w(Logs.UPSTREAM, TAG, "completion retry reason=upstream_5xx attempt=" + apiRetries
+                                + " http=" + code + " biz_code=" + bizCode);
                         try { Thread.sleep(500L); } catch (InterruptedException ignored) { }
                         continue;
                     }
@@ -258,6 +263,7 @@ public final class DeepSeekClient {
                 if (reply.content.isEmpty() && reply.reasoning.isEmpty()) {
                     if (emptyRetries < 2) {
                         emptyRetries += 1;
+                        Logs.w(Logs.UPSTREAM, TAG, "completion retry reason=empty_stream attempt=" + emptyRetries);
                         pow = powHeader(PATH_COMPLETION);
                         try { Thread.sleep(700L * emptyRetries); } catch (InterruptedException ignored) { }
                         continue;
@@ -287,9 +293,13 @@ public final class DeepSeekClient {
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             long lastProgress = 0L;
+            int lastFragments = -1;
             while ((line = reader.readLine()) != null) {
                 long now = System.currentTimeMillis();
-                if (now - lastProgress >= 3000L) {
+                // Log on structural change or as a slow heartbeat: a 50s answer
+                // used to emit 16 identical lines and drown the request view.
+                if (state.fragments.size() != lastFragments || now - lastProgress >= 15_000L) {
+                    lastFragments = state.fragments.size();
                     lastProgress = now;
                     int contentChars = 0;
                     int thinkChars = 0;
@@ -298,8 +308,8 @@ public final class DeepSeekClient {
                         if ("THINK".equals(f.type)) thinkChars += f.content.length();
                         else contentChars += f.content.length();
                     }
-                    Logs.i(Logs.UPSTREAM, TAG, "stream progress fragments=" + state.fragments.size()
-                            + " content_chars=" + contentChars + " reasoning_chars=" + thinkChars);
+                    Logs.d(Logs.UPSTREAM, TAG, "stream fragments=" + state.fragments.size()
+                            + " content=" + contentChars + " reasoning=" + thinkChars);
                 }
                 if (line.isEmpty()) {
                     if (data.length() > 0) {
@@ -562,12 +572,16 @@ public final class DeepSeekClient {
                     Cache c = cache();
                     if (c.sessionBusy || c.sessionId != null) return;
                     c.sessionBusy = true;
+                    // Mark this thread's logs so background work cannot be
+                    // mistaken for a second call of the request in flight.
+                    Logs.setTrace("bg=prefetch");
                     try {
                         c.sessionId = createSession();
                         c.sessionAt = System.currentTimeMillis();
                     } catch (Throwable ignore) {
                     } finally {
                         c.sessionBusy = false;
+                        Logs.clearTrace();
                     }
                 }
             });
@@ -599,6 +613,7 @@ public final class DeepSeekClient {
                     Cache c = cache();
                     if (c.powBusy || c.pow != null) return;
                     c.powBusy = true;
+                    Logs.setTrace("bg=prefetch");
                     try {
                         Solved solved = solve(PATH_COMPLETION);
                         c.pow = solved.header;
@@ -606,6 +621,7 @@ public final class DeepSeekClient {
                     } catch (Throwable ignore) {
                     } finally {
                         c.powBusy = false;
+                        Logs.clearTrace();
                     }
                 }
             });

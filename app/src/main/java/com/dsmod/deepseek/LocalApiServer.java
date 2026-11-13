@@ -120,6 +120,15 @@ public final class LocalApiServer {
             acceptor.setDaemon(true);
             acceptor.start();
             log(Logs.MAIN, "local api listening on " + Config.host + ":" + Config.port);
+            // Effective config snapshot: without it, every bug report needs a
+            // separate /admin/api/config round-trip to know what was in effect.
+            log(Logs.MAIN, "config model=" + Config.defaultModel
+                    + " thinking=" + Config.thinking + " thinkingMode=" + Config.thinkingMode
+                    + " search=" + Config.search + " concurrency=" + Config.concurrency
+                    + " maxPrompt=" + Config.maxPromptChars
+                    + " maxAttachment=" + Config.maxAttachmentChars
+                    + " powNative=" + Config.powNative
+                    + " accounts=" + Accounts.size() + " active=" + Accounts.activeCount());
         } catch (Throwable t) {
             Logs.e(Logs.MAIN, TAG, "start local api failed on port " + Config.port, t);
             STARTED.set(false);

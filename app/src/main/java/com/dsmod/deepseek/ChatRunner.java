@@ -453,8 +453,10 @@ public final class ChatRunner {
         // Tool calls may live in the content stream, in the thinking block, or
         // split across both; search them independently so nothing is missed.
         List<ToolKit.Call> calls = ToolKit.parseCalls(reply.content);
+        String callSource = calls.isEmpty() ? "none" : "content";
         if (calls.isEmpty() && !result.reasoning.isEmpty()) {
             calls = ToolKit.parseCalls(result.reasoning);
+            if (!calls.isEmpty()) callSource = "reasoning";
         }
         List<ToolKit.Call> coerced = new ArrayList<>();
         for (ToolKit.Call call : calls) {
@@ -466,20 +468,49 @@ public final class ChatRunner {
             coerced.add(fixed);
         }
         result.toolCalls = coerced;
-        String visible = ToolKit.stripMarkup(reply.content);
-        String thinking = ToolKit.stripMarkup(result.reasoning);
+        String rawContent = reply.content == null ? "" : reply.content;
+        String rawThinking = result.reasoning == null ? "" : result.reasoning;
+        String visible = ToolKit.stripMarkup(rawContent);
+        // Reasoning only loses protocol tokens, never whole lines: stripMarkup
+        // also drops RESULT:/DO:/section-header lines, which are ordinary prose
+        // inside a thinking block. That silently ate ~2k chars per turn
+        // (log: completion reasoning_chars=7590 -> extract reasoning_chars=5620).
+        String thinking = ToolKit.scrubProtocol(rawThinking);
+        if (thinking.length() > 0) {
+            thinking = thinking.replaceAll("\\n{3,}", "\\n\\n").trim();
+        }
         if (visible.trim().isEmpty() && thinking.isEmpty()) {
             // Nothing visible at all: keep the raw text so the client is not
             // handed an empty assistant message.
-            visible = reply.content == null ? "" : reply.content.trim();
+            visible = rawContent.trim();
         }
         result.content = visible;
         result.reasoning = thinking;
         result.fabricated = ToolKit.hasFabricatedProtocol(reply.content)
                 || ToolKit.hasFabricatedProtocol(reply.reasoning);
-        Logs.d(Logs.CHAT, TAG, "extract content_chars=" + result.content.length()
-                + " reasoning_chars=" + result.reasoning.length()
-                + " tool_calls=" + result.toolCalls.size()
+
+        // Strip accounting: content dropping to zero used to be invisible, which
+        // made "the answer vanished" impossible to diagnose from logs alone.
+        int contentRemoved = rawContent.length() - visible.length();
+        int thinkingRemoved = rawThinking.length() - thinking.length();
+        if (contentRemoved > 0 || thinkingRemoved > 0) {
+            Logs.d(Logs.CHAT, TAG, "strip content=" + rawContent.length() + "->" + visible.length()
+                    + " reasoning=" + rawThinking.length() + "->" + thinking.length()
+                    + " removed=" + (contentRemoved + thinkingRemoved)
+                    + " tool_source=" + callSource);
+        }
+
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < result.toolCalls.size(); i++) {
+            if (i > 0) names.append(',');
+            ToolKit.Call c = result.toolCalls.get(i);
+            names.append(c.name).append('(').append(c.arguments.length()).append("B)");
+        }
+        Logs.i(Logs.CHAT, TAG, "extract content=" + result.content.length()
+                + " reasoning=" + result.reasoning.length()
+                + " tools=" + result.toolCalls.size()
+                + (names.length() > 0 ? " [" + names + "]" : "")
+                + " src=" + callSource
                 + " fabricated=" + result.fabricated);
         result.elapsedMs = System.currentTimeMillis() - start;
         Logs.i(Logs.CHAT, TAG, "chat done content_chars=" + result.content.length()
