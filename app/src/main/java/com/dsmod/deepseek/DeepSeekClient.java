@@ -346,15 +346,18 @@ public final class DeepSeekClient {
      */
     private static void emitDeltas(State state, Sink sink, int[] sent) {
         if (sink == null) return;
-        String content = collect(state, "RESPONSE");
-        if (content.length() > sent[0]) {
-            sink.onContent(content.substring(sent[0]));
-            sent[0] = content.length();
-        }
+        // Reasoning first: the thinking block must always precede the answer.
+        // fuckds enforces the same order by holding the first content delta
+        // (REASONING_HOLD_MS) instead of letting content overtake thinking.
         String think = collect(state, "THINK");
         if (think.length() > sent[1]) {
             sink.onReasoning(think.substring(sent[1]));
             sent[1] = think.length();
+        }
+        String content = collect(state, "RESPONSE");
+        if (content.length() > sent[0]) {
+            sink.onContent(content.substring(sent[0]));
+            sent[0] = content.length();
         }
     }
 
@@ -502,8 +505,12 @@ public final class DeepSeekClient {
     /* Warm caches (one reusable session + one prefetched pow header)      */
     /* ------------------------------------------------------------------ */
 
+    /** A prefetched session idle longer than this is treated as expired. */
+    private static final long SESSION_TTL_MS = 120_000L;
+
     private static final class Cache {
         volatile String sessionId;
+        volatile long sessionAt;
         volatile String pow;
         volatile long powExpireAt;
         volatile boolean sessionBusy;
@@ -531,7 +538,17 @@ public final class DeepSeekClient {
     private String takeSession() throws ApiException {
         Cache c = cache();
         String id = c.sessionId;
+        long at = c.sessionAt;
+        // Take-and-clear: one session serves exactly one request, so upstream
+        // never accumulates context for us. Same contract as fuckds
+        // (account.sessionPool.pop() is never pushed back).
         c.sessionId = null;
+        c.sessionAt = 0L;
+        if (id != null && !id.isEmpty()
+                && System.currentTimeMillis() - at > SESSION_TTL_MS) {
+            Logs.d(Logs.UPSTREAM, TAG, "prefetched session stale, recreating");
+            id = null;
+        }
         if (id == null || id.isEmpty()) id = createSession();
         prefetchSession();
         return id;
@@ -547,6 +564,7 @@ public final class DeepSeekClient {
                     c.sessionBusy = true;
                     try {
                         c.sessionId = createSession();
+                        c.sessionAt = System.currentTimeMillis();
                     } catch (Throwable ignore) {
                     } finally {
                         c.sessionBusy = false;

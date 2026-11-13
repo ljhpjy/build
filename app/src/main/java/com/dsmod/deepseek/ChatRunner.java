@@ -415,10 +415,16 @@ public final class ChatRunner {
 
         final ToolKit.StreamFilter contentFilter =
                 sink == null ? null : new ToolKit.StreamFilter();
+        // Separate filter instance: the reasoning stream must not share the
+        // dropping state of the content stream.
+        final ToolKit.StreamFilter reasoningFilter =
+                sink == null ? null : new ToolKit.StreamFilter();
         DeepSeekClient.Sink inner = new DeepSeekClient.Sink() {
             @Override
             public void onReasoning(String delta) {
-                if (sink != null) sink.onReasoning(delta);
+                if (sink == null || reasoningFilter == null) return;
+                String safe = reasoningFilter.push(delta);
+                if (!safe.isEmpty()) sink.onReasoning(safe);
             }
 
             @Override
@@ -435,6 +441,10 @@ public final class ChatRunner {
         if (contentFilter != null) {
             String rest = contentFilter.flush();
             if (!rest.isEmpty()) sink.onContent(rest);
+        }
+        if (reasoningFilter != null) {
+            String rest = reasoningFilter.flush();
+            if (!rest.isEmpty()) sink.onReasoning(rest);
         }
 
         result.reasoning = reply.reasoning == null ? "" : reply.reasoning;

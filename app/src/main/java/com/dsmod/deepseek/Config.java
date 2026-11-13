@@ -63,8 +63,13 @@ public final class Config {
     /** 号池全冷却时的最大等待，超时返回 429。 */
     public static long maxCooldownWaitMs = 5_000L;
 
-    /** 单条 prompt 上限；超过即转附件（官方网页 10 万字，但超长单次耗时可达 30s+）。 */
-    public static int maxPromptChars = 32_000;
+    /**
+     * 单条 prompt 上限；超过就把较早的上下文拆成 .txt 附件。
+     *
+     * 与 fuckds MAX_PROMPT_CHARS 一致：165 万字是网页输入框的真实上限，
+     * 不是「长文本慢」的保守值。调小会让正常对话频繁转附件，反而更慢。
+     */
+    public static int maxPromptChars = 1_650_000;
     /** 拆到附件的上下文上限（字符）。 */
     public static int maxAttachmentChars = 2_000_000;
     /** 超长时是否转附件；false 则直接 413。 */

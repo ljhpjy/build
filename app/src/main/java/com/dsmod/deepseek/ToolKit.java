@@ -213,9 +213,178 @@ public final class ToolKit {
     /* ------------------------------------------------------------------ */
 
     public static List<Call> parseCalls(String text) {
-        List<Call> calls = parseDsmlCalls(text);
+        // The App build emits native channel tokens (a different protocol from
+        // the web build), so try that shape first: it is unambiguous.
+        List<Call> calls = parseNativeChannelCalls(text);
+        if (calls.isEmpty()) calls = parseNativeToolTokenCalls(text);
+        if (calls.isEmpty()) calls = parseDsmlCalls(text);
         if (calls.isEmpty()) calls = parseJsonToolCalls(text);
+        // Deliberately NOT deduped: in an agent loop the same call repeated
+        // verbatim is normal (re-observe after every step). Dropping duplicates
+        // turns a whole turn into an empty reply (fuckds v2.0.3). Only one
+        // parser can contribute here anyway, since each branch is gated on
+        // calls.isEmpty().
         return calls;
+    }
+
+    /**
+     * Native tool tokens like &lt;|tool▁calls▁begin|&gt; followed by a JSON body
+     * carrying name / arguments (fuckds parseNativeToolCalls, shape 1).
+     */
+    public static List<Call> parseNativeToolTokenCalls(String text) {
+        List<Call> calls = new ArrayList<>();
+        if (text == null || text.isEmpty()) return calls;
+        java.util.regex.Matcher m = NATIVE_TOOL_TOKEN.matcher(text);
+        while (m.find()) {
+            int tokenEnd = m.end();
+            int braceAt = text.indexOf('{', tokenEnd);
+            if (braceAt < 0 || braceAt - tokenEnd > 600) continue;
+            int end = readJsonEnd(text, braceAt);
+            if (end < 0) continue;
+            Call call = callFromJson(text.substring(braceAt, end));
+            if (call == null) continue;
+            call.raw = text.substring(m.start(), end);
+            call.index = m.start();
+            calls.add(call);
+        }
+        return calls;
+    }
+
+    /**
+     * DeepSeek App native tool token:
+     *
+     *   &lt;|channel|&gt;commentary to=functions.NAME &lt;|constrain|&gt;json
+     *   {"arg":"value"}
+     *
+     * The web build never emits this, which is why fuckds does not need it.
+     */
+    public static List<Call> parseNativeChannelCalls(String text) {
+        List<Call> calls = new ArrayList<>();
+        if (text == null || text.isEmpty()) return calls;
+        String token = "<|channel|>";
+        int from = 0;
+        while (true) {
+            int start = text.indexOf(token, from);
+            if (start < 0) break;
+            int nl = text.indexOf('\n', start);
+            int headerEnd = nl < 0 ? text.length() : nl;
+            String header = text.substring(start + token.length(), headerEnd);
+            from = headerEnd;
+
+            int toIdx = header.indexOf("to=functions.");
+            if (toIdx < 0) continue;
+            String rest = header.substring(toIdx + "to=functions.".length()).trim();
+            int sp = 0;
+            while (sp < rest.length() && isTagChar(rest.charAt(sp))) sp++;
+            if (sp == 0) continue;
+            String name = rest.substring(0, sp);
+
+            // The JSON may sit on the same line as the header, so scan from the
+            // header start rather than from the following line.
+            int bracePos = text.indexOf('{', start + token.length());
+            if (bracePos < 0) continue;
+            int end = readJsonEnd(text, bracePos);
+            if (end < 0) continue;
+            JSONObject args;
+            try {
+                args = new JSONObject(text.substring(bracePos, end));
+            } catch (Throwable t) {
+                continue;
+            }
+            Call call = new Call();
+            call.name = name;
+            call.arguments = args.toString();
+            call.raw = text.substring(start, end);
+            call.index = start;
+            calls.add(call);
+            from = end;
+        }
+        return calls;
+    }
+
+    /** Brace matching that skips braces inside JSON strings; returns end (exclusive) or -1. */
+    private static int readJsonEnd(String s, int open) {
+        if (s == null || open < 0 || open >= s.length() || s.charAt(open) != '{') return -1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = open; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    /** &lt;|tool▁calls▁begin|&gt; / &lt;|tool_calls|&gt; style tokens (App build variants). */
+    private static final java.util.regex.Pattern NATIVE_TOOL_TOKEN =
+            java.util.regex.Pattern.compile(
+                    "<[ \\t]*\\|[^|<>\\r\\n]{0,64}tool[^|<>\\r\\n]{0,64}\\|[ \\t]*>",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Remove a native tool token together with the JSON body that follows it. */
+    private static String removeNativeToolTokenBlocks(String text) {
+        if (text == null || text.isEmpty()) return text;
+        StringBuilder out = new StringBuilder();
+        int from = 0;
+        java.util.regex.Matcher m = NATIVE_TOOL_TOKEN.matcher(text);
+        while (m.find()) {
+            if (m.start() < from) continue;
+            out.append(text, from, m.start());
+            int tokenEnd = m.end();
+            int end = tokenEnd;
+            int braceAt = text.indexOf('{', tokenEnd);
+            if (braceAt >= 0 && braceAt - tokenEnd <= 600) {
+                int jsonEnd = readJsonEnd(text, braceAt);
+                if (jsonEnd > 0 && text.substring(braceAt, jsonEnd).contains("\"name\"")) {
+                    end = jsonEnd;
+                }
+            }
+            from = end;
+        }
+        out.append(text.substring(from));
+        return out.toString();
+    }
+
+    /** Remove native channel tool blocks and any leftover &lt;|...|&gt; special token. */
+    private static String removeNativeChannelBlocks(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String token = "<|channel|>";
+        StringBuilder out = new StringBuilder();
+        int from = 0;
+        while (true) {
+            int start = text.indexOf(token, from);
+            if (start < 0) break;
+            out.append(text, from, start);
+            int nl = text.indexOf('\n', start);
+            int headerEnd = nl < 0 ? text.length() : nl;
+            String header = text.substring(start + token.length(), headerEnd);
+            int end = headerEnd;
+            // Only a real tool header is followed by a JSON body. A plain
+            // <|channel|>final marker must not swallow the answer text.
+            if (header.contains("to=functions.")) {
+                int bracePos = text.indexOf('{', start + token.length());
+                if (bracePos >= 0) {
+                    int jsonEnd = readJsonEnd(text, bracePos);
+                    if (jsonEnd > 0) end = jsonEnd;
+                }
+            }
+            from = end;
+        }
+        out.append(text.substring(from));
+        return out.toString().replaceAll("<\\|[^|<>\\r\\n]{0,40}\\|>", "");
     }
 
     /**
@@ -344,9 +513,25 @@ public final class ToolKit {
     /* Clean visible text                                                  */
     /* ------------------------------------------------------------------ */
 
+    /**
+     * Remove protocol markup only (no line filtering), safe to run over a whole
+     * prompt: history must never hand the model a call-syntax template, and
+     * upstream risk control flags exactly that pattern.
+     */
+    public static String scrubProtocol(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String s = removeNativeChannelBlocks(text);
+        s = removeNativeToolTokenBlocks(s);
+        s = removeDsmlBlocks(s);
+        s = removeEndTokens(s);
+        return s;
+    }
+
     public static String stripMarkup(String text) {
         if (text == null || text.isEmpty()) return "";
-        String s = removeDsmlBlocks(text);
+        String s = removeNativeChannelBlocks(text);
+        s = removeNativeToolTokenBlocks(s);
+        s = removeDsmlBlocks(s);
         s = removeEndTokens(s);
         s = removeProtocolLines(s);
         s = s.replaceAll("```[a-zA-Z0-9_+-]*[ \\t]*\\r?\\n[ \\t]*\\r?\\n?[ \\t]*```(\\r?\\n)?", "");
@@ -477,6 +662,8 @@ public final class ToolKit {
     public static final class StreamFilter {
         private final StringBuilder pending = new StringBuilder();
         private boolean droppingDsml = false;
+        /** Skipping the JSON line that follows a native <|channel|> tool header. */
+        private boolean droppingNative = false;
 
         public String push(String delta) {
             if (delta == null || delta.isEmpty()) return "";
@@ -519,6 +706,25 @@ public final class ToolKit {
 
         private String filterLine(String line) {
             String trimmed = line.trim();
+            // Native channel tool tokens (App build only): drop the header line
+            // and the JSON argument line that follows it.
+            if (trimmed.contains("<|channel|>") || trimmed.contains("<|constrain|>")) {
+                // Header line is always protocol. Only a tool header is followed
+                // by a JSON argument line; <|channel|>final is a plain marker.
+                droppingNative = trimmed.contains("to=functions.");
+                return null;
+            }
+            if (droppingNative) {
+                if (trimmed.isEmpty()) return null;
+                droppingNative = false;
+                if (trimmed.startsWith("{") || trimmed.startsWith("[")) return null;
+            }
+            if (trimmed.startsWith("<|")) {
+                // <|tool▁calls▁begin|> style token: its JSON body follows on the
+                // next line, so keep dropping until that line is consumed.
+                if (trimmed.toLowerCase().contains("tool")) droppingNative = true;
+                return null;
+            }
             if (droppingDsml) {
                 if (trimmed.contains("</") && (trimmed.contains("DSML")
                         || trimmed.contains("invoke") || trimmed.contains("parameter"))) {

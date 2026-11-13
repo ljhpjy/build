@@ -140,7 +140,11 @@ Output discipline:
             }
 
             if ("assistant".equals(role)) {
-                String text = contentToText(msg.opt("content"));
+                // Never feed protocol syntax back to the model: a past answer that
+                // still carries DSML / native channel tokens becomes a template it
+                // imitates, and it is exactly the pattern upstream risk control
+                // looks for. fuckds keeps history protocol-free for the same reason.
+                String text = ToolKit.stripMarkup(contentToText(msg.opt("content")));
                 if (!text.trim().isEmpty()) {
                     Part p = new Part("assistant");
                     p.lines.add(text);
@@ -209,7 +213,10 @@ Output discipline:
         List<String> toolLines = renderToolDeclarations(tools);
         int toolChars = 0;
         for (String line : toolLines) toolChars += line.length() + 1;
-        if (toolChars > 20000) {
+        // Same intent as fuckds toolDeclMode=auto: keep the declarations inside
+        // the body instead of letting them crowd out the conversation.
+        int compactAt = Math.max(8_000, Config.maxPromptChars / 2);
+        if (toolChars > compactAt) {
             List<String> compact = renderCompactToolDeclarations(tools);
             if (!compact.isEmpty()) {
                 toolLines = compact;
@@ -239,7 +246,9 @@ Output discipline:
             built.sections++;
         }
 
-        built.prompt = trimEnd(sb.toString());
+        // Final guard: whatever slipped in through client history, the prompt
+        // that reaches upstream carries no call-syntax template.
+        built.prompt = ToolKit.scrubProtocol(trimEnd(sb.toString()));
         return built;
     }
 
@@ -299,7 +308,10 @@ Output discipline:
                     JSONObject obj = new JSONObject(args);
                     parsedArgs = obj;
                 } catch (Throwable t) {
-                    parsedArgs.put("input", args);
+                    // arguments were not JSON: strip any protocol markup before it
+                    // reaches the prompt, otherwise the raw call syntax leaks.
+                    String cleaned = ToolKit.stripMarkup(args);
+                    if (!cleaned.trim().isEmpty()) parsedArgs.put("input", cleaned);
                 }
             }
             out.put("args", parsedArgs);
@@ -311,7 +323,7 @@ Output discipline:
         JSONObject out = new JSONObject();
         try {
             out.put("name", name);
-            out.put("result", result == null ? "" : result);
+            out.put("result", result == null ? "" : ToolKit.stripMarkup(result));
         } catch (Throwable ignore) { }
         return out.toString();
     }
