@@ -99,8 +99,8 @@ gradle :app:assembleRelease
 `version.properties` 是唯一真相，构建时自动注入到三处，不会再出现「改了版本号不生效」：
 
 ```properties
-VERSION_NAME=1.1.2
-VERSION_CODE=10102   # 可省略，自动由 VERSION_NAME 推导（1.1.2 -> 10102）
+VERSION_NAME=1.1.3
+VERSION_CODE=10103   # 可省略，自动由 VERSION_NAME 推导（1.1.3 -> 10103）
 ```
 
 | 位置 | 来源 |
