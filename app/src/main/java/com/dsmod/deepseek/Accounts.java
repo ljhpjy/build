@@ -424,6 +424,21 @@ public final class Accounts {
         }
     }
 
+    private static final java.util.concurrent.ConcurrentHashMap<String, Object> LOCKS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Per-token lock: upstream allows one in-flight generation per account. */
+    static Object lockFor(String token) {
+        String key = token == null ? "" : token;
+        Object lock = LOCKS.get(key);
+        if (lock == null) {
+            Object fresh = new Object();
+            Object prev = LOCKS.putIfAbsent(key, fresh);
+            lock = prev == null ? fresh : prev;
+        }
+        return lock;
+    }
+
     static String mask(String token) {
         if (token == null || token.length() <= 8) return "****";
         return token.substring(0, 4) + "****" + token.substring(token.length() - 4);

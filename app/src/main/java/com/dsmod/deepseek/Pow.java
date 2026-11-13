@@ -54,7 +54,7 @@ public final class Pow {
         return (v << n) | (v >>> (64 - n));
     }
 
-    /** Keccak-f[1600] permutation, rounds 1..23 only. Column-major lane state. */
+    /** Keccak-f[1600] permutation, full 24 rounds (SHA3-256). Column-major lane state. */
     public static void keccakF23(long[] s) {
         long[] c = new long[5];
         long[] d = new long[5];
@@ -64,7 +64,7 @@ public final class Pow {
 
     /** Same permutation with caller-provided scratch buffers (no per-call allocation). */
     private static void keccakF23Buf(long[] s, long[] c, long[] d, long[] b) {
-        for (int r = 1; r < 24; r++) {
+        for (int r = 0; r < 24; r++) {
             for (int x = 0; x < 5; x++) {
                 c[x] = s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20];
             }

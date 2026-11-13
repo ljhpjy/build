@@ -685,6 +685,13 @@ public final class LocalApiServer {
         return token;
     }
 
+    /** "有消息正在生成" is per-account concurrency, not an account fault. */
+    private static boolean isBusyHint(DeepSeekClient.ApiException e) {
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        return msg.contains("正在生成") || msg.contains("稍后再试")
+                || msg.toLowerCase().contains("generating");
+    }
+
     private interface AccountAttempt<T> {
         T run(String token) throws DeepSeekClient.ApiException;
     }
@@ -699,21 +706,26 @@ public final class LocalApiServer {
         DeepSeekClient.ApiException last = null;
         for (int i = 0; i < total; i++) {
             String token = pickToken();
-            try {
-                return attempt.run(token);
-            } catch (DeepSeekClient.ApiException e) {
-                if (e.status == 401) {
-                    Accounts.markAuthFailed(token, e.getMessage());
-                } else if (e.status == 429) {
-                    Accounts.markRateLimited(token, Config.rateLimitCooldownMs);
-                } else if (e.status >= 500) {
-                    Accounts.markError(token, e.getMessage());
-                } else {
-                    throw e;
+            // Upstream allows only one in-flight generation per account, so
+            // requests sharing a token are serialized instead of colliding
+            // with "有消息正在生成".
+            synchronized (Accounts.lockFor(token)) {
+                try {
+                    return attempt.run(token);
+                } catch (DeepSeekClient.ApiException e) {
+                    if (e.status == 401) {
+                        Accounts.markAuthFailed(token, e.getMessage());
+                    } else if (e.status == 429) {
+                        Accounts.markRateLimited(token, Config.rateLimitCooldownMs);
+                    } else if (e.status >= 500 && !isBusyHint(e)) {
+                        Accounts.markError(token, e.getMessage());
+                    } else {
+                        throw e;
+                    }
+                    last = e;
+                    Logs.w(Logs.ACCOUNT, TAG, "failover after " + e.status + " "
+                            + (e.code == null ? "" : e.code) + ", attempts=" + total);
                 }
-                last = e;
-                Logs.w(Logs.ACCOUNT, TAG, "failover after " + e.status + " "
-                        + (e.code == null ? "" : e.code) + ", attempts=" + total);
             }
         }
         throw last != null ? last
@@ -730,7 +742,8 @@ public final class LocalApiServer {
 
             if (req.stream) {
                 token = pickToken();
-                DeepSeekClient client = new DeepSeekClient(token, deviceId);
+                final String firstTok = token;
+                final DeepSeekClient firstClient = new DeepSeekClient(token, deviceId);
                 writeSseHeaders(out);
                 final boolean[] roleSent = {false};
                 ChatRunner.StreamSink sink = new ChatRunner.StreamSink() {
@@ -748,7 +761,14 @@ public final class LocalApiServer {
                         } catch (Throwable ignore) { }
                     }
                 };
-                ChatRunner.Result result = ChatRunner.run(req, client, sink);
+                final ChatRunner.StreamSink ss = sink;
+                ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                    @Override
+                    public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                        return ChatRunner.run(req, tok.equals(firstTok) ? firstClient
+                                : new DeepSeekClient(tok, deviceId), ss);
+                    }
+                });
                 if (!result.toolCalls.isEmpty()) {
                     writeToolCallChunks(out, id, model, result.toolCalls, roleSent);
                 }
@@ -830,7 +850,8 @@ public final class LocalApiServer {
             req.model = json.optString("model", Config.defaultModel);
 
             token = pickToken();
-            DeepSeekClient client = new DeepSeekClient(token, deviceId);
+            final String firstTok = token;
+            final DeepSeekClient client = new DeepSeekClient(token, deviceId);
             if (req.stream) {
                 writeSseHeaders(out);
                 final String modelName = req.model;
@@ -845,7 +866,14 @@ public final class LocalApiServer {
                         try { writeCompletionChunk(out, id, modelName, delta); } catch (Throwable ignore) { }
                     }
                 };
-                ChatRunner.run(req, client, sink);
+                final ChatRunner.StreamSink ss2 = sink;
+                withFailover(new AccountAttempt<ChatRunner.Result>() {
+                    @Override
+                    public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                        return ChatRunner.run(req, tok.equals(firstTok) ? client
+                                : new DeepSeekClient(tok, deviceId), ss2);
+                    }
+                });
                 writeChunk(out, "data: [DONE]\n\n");
                 endChunked(out);
                 return;
@@ -1077,7 +1105,8 @@ public final class LocalApiServer {
             ChatRunner.Request req = ChatRunner.normalizeAnthropic(new JSONObject(body));
             if (req.stream) {
                 token = pickToken();
-                DeepSeekClient client = new DeepSeekClient(token, deviceId);
+                final String firstTok = token;
+                final DeepSeekClient client = new DeepSeekClient(token, deviceId);
                 writeSseHeaders(out);
                 AnthropicSse sse = new AnthropicSse(out, id, req.model,
                         ChatRunner.estimateTokens(req.messages.toString()));
@@ -1097,7 +1126,14 @@ public final class LocalApiServer {
                         } catch (Throwable ignore) { }
                     }
                 };
-                ChatRunner.Result result = ChatRunner.run(req, client, sink);
+                final ChatRunner.StreamSink ss3 = sink;
+                ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                    @Override
+                    public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                        return ChatRunner.run(req, tok.equals(firstTok) ? client
+                                : new DeepSeekClient(tok, deviceId), ss3);
+                    }
+                });
                 sse.finish(result);
                 endChunked(out);
                 return;
@@ -1484,7 +1520,8 @@ public final class LocalApiServer {
             req.model = json.optString("model", Config.defaultModel);
 
             token = pickToken();
-            DeepSeekClient client = new DeepSeekClient(token, deviceId);
+            final String firstTok = token;
+            final DeepSeekClient client = new DeepSeekClient(token, deviceId);
 
             if (req.stream) {
                 writeSseHeaders(out);
@@ -1505,13 +1542,25 @@ public final class LocalApiServer {
                         } catch (Throwable ignore) { }
                     }
                 };
-                ChatRunner.Result result = ChatRunner.run(req, client, sink);
+                final ChatRunner.StreamSink ss4 = sink;
+                ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                    @Override
+                    public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                        return ChatRunner.run(req, tok.equals(firstTok) ? client
+                                : new DeepSeekClient(tok, deviceId), ss4);
+                    }
+                });
                 sse.finish(result);
                 endChunked(out);
                 return;
             }
 
-            ChatRunner.Result result = ChatRunner.run(req, client, null);
+            ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
+                @Override
+                public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                }
+            });
             writeJson(out, 200, buildResponsesResponse(id, req.model, result).toString());
         } catch (DeepSeekClient.ApiException e) {
             lastErrorKind = e.code == null ? "" : e.code;
