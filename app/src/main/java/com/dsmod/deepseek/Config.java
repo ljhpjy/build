@@ -19,8 +19,27 @@ public final class Config {
     /** 可选：设置后要求 Authorization: Bearer <key> 或 x-api-key: <key>。 */
     public static String apiKey = "";
 
-    /** 默认模型名（只是对外标识，网页版实际模型固定）。 */
-    public static String defaultModel = "deepseek-v4.1-flash-1017";
+    /**
+     * 对外默认模型名。
+     *
+     * DeepSeek 2.7.5 的 model_type 只有三档（ModelConfig.type）：
+     *   default —— 默认（快速）
+     *   expert  —— 专家（深度推理）
+     *   vision  —— 视觉（识图）
+     * 这里用 deepseek-default / deepseek-expert / deepseek-vision 作为对外 id，
+     * 请求时再映射回官方 model_type（见 DeepSeekClient）。
+     */
+    public static String defaultModel = "deepseek-default";
+
+    /** 对外模型 id -> 官方 model_type 的映射（大小写不敏感前缀匹配）。 */
+    public static String modelTypeOf(String model) {
+        String m = model == null ? "" : model.trim().toLowerCase();
+        if (m.isEmpty()) return "default";
+        if (m.contains("vision") || m.contains("image") || m.contains("vl")) return "vision";
+        if (m.contains("expert") || m.contains("pro") || m.contains("reason")
+                || m.contains("r1") || m.contains("think")) return "expert";
+        return "default";
+    }
 
     /** 是否默认开启深度思考。 */
     public static boolean thinking = true;

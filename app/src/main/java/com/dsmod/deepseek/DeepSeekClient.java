@@ -74,9 +74,14 @@ public final class DeepSeekClient {
     private final String baseUrl;
 
     public DeepSeekClient(String token, String deviceId) {
+        this(token, deviceId, Config.defaultModel);
+    }
+
+    public DeepSeekClient(String token, String deviceId, String model) {
         this.token = token;
         this.deviceId = deviceId;
         this.baseUrl = Config.baseUrl;
+        this.modelType = Config.modelTypeOf(model);
     }
 
     public String token() {
@@ -167,6 +172,9 @@ public final class DeepSeekClient {
     /* Completion (SSE patch stream)                                       */
     /* ------------------------------------------------------------------ */
 
+    /** Official model_type of this client (default / expert / vision). */
+    private final String modelType;
+
     public Reply completion(String prompt, boolean thinking, boolean search,
                             List<String> refFileIds, Sink sink) throws ApiException {
         Reply reply = new Reply();
@@ -185,7 +193,7 @@ public final class DeepSeekClient {
         try {
             body.put("chat_session_id", sessionId);
             body.put("parent_message_id", JSONObject.NULL);
-            body.put("model_type", "default");
+            body.put("model_type", modelType);
             body.put("prompt", prompt);
             JSONArray ids = new JSONArray();
             if (refFileIds != null) for (String id : refFileIds) ids.put(id);
@@ -194,6 +202,10 @@ public final class DeepSeekClient {
             body.put("search_enabled", search);
             body.put("action", JSONObject.NULL);
             body.put("preempt", false);
+            // ChatFullCompletionRequest also carries audio_id; the app sends it
+            // as null for text-only turns. shumei_device_id is optional
+            // (encodeDefaults=false) so it is omitted on purpose.
+            body.put("audio_id", JSONObject.NULL);
         } catch (Throwable t) {
             throw new ApiException(400, "build completion body failed: " + t, "invalid_request");
         }
@@ -268,6 +280,8 @@ public final class DeepSeekClient {
         State state = new State();
         String event = null;
         StringBuilder data = new StringBuilder();
+        // Text already forwarded to the client, so each patch only emits the delta.
+        final int[] sent = {0, 0}; // [0] = RESPONSE chars, [1] = THINK chars
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
@@ -290,6 +304,7 @@ public final class DeepSeekClient {
                 if (line.isEmpty()) {
                     if (data.length() > 0) {
                         handleFrame(state, event, data.toString().trim());
+                        emitDeltas(state, sink, sent);
                         event = null;
                         data.setLength(0);
                     }
@@ -301,7 +316,10 @@ public final class DeepSeekClient {
                     data.append(line.substring(5)).append('\n');
                 }
             }
-            if (data.length() > 0) handleFrame(state, event, data.toString().trim());
+            if (data.length() > 0) {
+                handleFrame(state, event, data.toString().trim());
+                emitDeltas(state, sink, sent);
+            }
         } catch (ApiException e) {
             throw e;
         } catch (Throwable t) {
@@ -317,6 +335,27 @@ public final class DeepSeekClient {
                 + " ttft_ms=" + (reply.firstTokenMs >= 0 ? reply.firstTokenMs : -1)
                 + " total_ms=" + (System.currentTimeMillis() - t0));
         return reply;
+    }
+
+    /**
+     * Forward only the newly appended text of this patch to the streaming sink.
+     *
+     * Without this the SSE path emitted nothing at all: readStream collected
+     * fragments but never pushed them, so the client saw an empty response
+     * while the non-streaming path (which reads collect() at the end) worked.
+     */
+    private static void emitDeltas(State state, Sink sink, int[] sent) {
+        if (sink == null) return;
+        String content = collect(state, "RESPONSE");
+        if (content.length() > sent[0]) {
+            sink.onContent(content.substring(sent[0]));
+            sent[0] = content.length();
+        }
+        String think = collect(state, "THINK");
+        if (think.length() > sent[1]) {
+            sink.onReasoning(think.substring(sent[1]));
+            sent[1] = think.length();
+        }
     }
 
     private void handleFrame(State state, String event, String text) throws ApiException {

@@ -761,7 +761,7 @@ public final class LocalApiServer {
             if (req.stream) {
                 token = pickToken();
                 final String firstTok = token;
-                final DeepSeekClient firstClient = new DeepSeekClient(token, deviceId);
+                final DeepSeekClient firstClient = new DeepSeekClient(token, deviceId, req.model);
                 writeSseHeaders(out);
                 final boolean[] roleSent = {false};
                 ChatRunner.StreamSink sink = new ChatRunner.StreamSink() {
@@ -784,7 +784,7 @@ public final class LocalApiServer {
                     @Override
                     public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
                         return ChatRunner.run(req, tok.equals(firstTok) ? firstClient
-                                : new DeepSeekClient(tok, deviceId), ss);
+                                : new DeepSeekClient(tok, deviceId, req.model), ss);
                     }
                 }, firstTok);
                 if (!result.toolCalls.isEmpty()) {
@@ -801,7 +801,7 @@ public final class LocalApiServer {
             ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
                 @Override
                 public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
-                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId, req.model), null);
                 }
             });
             writeJson(out, 200, buildOpenAiResponse(id, req.model, result).toString());
@@ -869,7 +869,7 @@ public final class LocalApiServer {
 
             token = pickToken();
             final String firstTok = token;
-            final DeepSeekClient client = new DeepSeekClient(token, deviceId);
+            final DeepSeekClient client = new DeepSeekClient(token, deviceId, req.model);
             if (req.stream) {
                 writeSseHeaders(out);
                 final String modelName = req.model;
@@ -889,7 +889,7 @@ public final class LocalApiServer {
                     @Override
                     public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
-                                : new DeepSeekClient(tok, deviceId), ss2);
+                                : new DeepSeekClient(tok, deviceId, req.model), ss2);
                     }
                 }, firstTok);
                 writeChunk(out, "data: [DONE]\n\n");
@@ -1124,7 +1124,7 @@ public final class LocalApiServer {
             if (req.stream) {
                 token = pickToken();
                 final String firstTok = token;
-                final DeepSeekClient client = new DeepSeekClient(token, deviceId);
+                final DeepSeekClient client = new DeepSeekClient(token, deviceId, req.model);
                 writeSseHeaders(out);
                 AnthropicSse sse = new AnthropicSse(out, id, req.model,
                         ChatRunner.estimateTokens(req.messages.toString()));
@@ -1149,7 +1149,7 @@ public final class LocalApiServer {
                     @Override
                     public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
-                                : new DeepSeekClient(tok, deviceId), ss3);
+                                : new DeepSeekClient(tok, deviceId, req.model), ss3);
                     }
                 }, firstTok);
                 sse.finish(result);
@@ -1160,7 +1160,7 @@ public final class LocalApiServer {
             ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
                 @Override
                 public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
-                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId, req.model), null);
                 }
             });
             writeJson(out, 200, buildAnthropicResponse(id, req.model, result).toString());
@@ -1539,7 +1539,7 @@ public final class LocalApiServer {
 
             token = pickToken();
             final String firstTok = token;
-            final DeepSeekClient client = new DeepSeekClient(token, deviceId);
+            final DeepSeekClient client = new DeepSeekClient(token, deviceId, req.model);
 
             if (req.stream) {
                 writeSseHeaders(out);
@@ -1565,7 +1565,7 @@ public final class LocalApiServer {
                     @Override
                     public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
-                                : new DeepSeekClient(tok, deviceId), ss4);
+                                : new DeepSeekClient(tok, deviceId, req.model), ss4);
                     }
                 }, firstTok);
                 sse.finish(result);
@@ -1576,7 +1576,7 @@ public final class LocalApiServer {
             ChatRunner.Result result = withFailover(new AccountAttempt<ChatRunner.Result>() {
                 @Override
                 public ChatRunner.Result run(String tok) throws DeepSeekClient.ApiException {
-                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId), null);
+                    return ChatRunner.run(req, new DeepSeekClient(tok, deviceId, req.model), null);
                 }
             });
             writeJson(out, 200, buildResponsesResponse(id, req.model, result).toString());
@@ -2029,9 +2029,11 @@ public final class LocalApiServer {
 
     private static void handleModels(OutputStream out) throws Exception {
         JSONArray data = new JSONArray();
+        // Exactly the three model_type values DeepSeek 2.7.5 ships
+        // (com.deepseek.chat.settings.ModelConfig.type).
         String[] models = {
-                Config.defaultModel, "deepseek-chat", "deepseek-reasoner", "deepseek-expert",
-                "deepseek-v4.1-flash-1017",
+                "deepseek-default", "deepseek-expert", "deepseek-vision",
+                Config.defaultModel,
         };
         java.util.List<String> seen = new java.util.ArrayList<>();
         for (String id : models) {
