@@ -42,31 +42,40 @@
 
 ```
 dsmod-deepseek/
-├── .github/workflows/build.yml        # GitHub Actions：JDK 17 + Gradle 构建 + 签名 + 上传 APK
+├── .github/workflows/build.yml        # 构建 + 签名 + 上传 + 成功后自动 +1 版本
+├── version.properties                 # 版本唯一来源（VERSION_NAME / VERSION_CODE）
 ├── build.gradle / settings.gradle / gradle.properties
 ├── gradle/wrapper/gradle-wrapper.properties
+├── 软件图标.png                        # 图标源文件（实际是 JPEG，不参与打包）
 └── app/
     ├── build.gradle
     └── src/main/
         ├── AndroidManifest.xml       # Xposed 模块声明（无 Service / Receiver）
         ├── assets/xposed_init        # com.dsmod.deepseek.Main
-        ├── res/values/arrays.xml     # xposedscope = com.deepseek.chat
+        ├── res/
+        │   ├── mipmap-xxxhdpi/ic_launcher.jpg   # 应用 / LSPosed 模块图标
+        │   └── values/arrays.xml     # xposedscope = com.deepseek.chat
         └── java/com/dsmod/deepseek/
             ├── Main.java             # Xposed 入口（Application + ActivityThread 三重 hook）
-            ├── Config.java           # 默认配置
-            ├── Logs.java             # 自包含日志（去敏 / 复制 / 导出）
-            ├── Notifier.java         # 宿主进程常驻通知
-            ├── AdminPage.java        # /admin 深色控制台
-            ├── Accounts.java         # token 读取（MMKV）+ 号池
-            ├── Pow.java              # DeepSeekHashV1 纯 Java 求解 + 官方 native 加速
-            ├── DeepSeekClient.java   # direct 引擎（会话/PoW/SSE/上传）
+            ├── Host.java             # 宿主 ClassLoader 桥接（MMKV / PowCalculator）
+            ├── Config.java           # 默认配置 + 编译期注入版本号
+            ├── Stats.java            # 累计计数（调用数 / 降级数 / 伪造数）
+            ├── Logs.java             # 自包含日志（分类 / 去敏 / 复制 / 导出）
+            ├── Notifier.java         # 宿主进程常驻状态通知
+            ├── AdminPage.java        # /admin 深色控制台（手机端卡片布局）
+            ├── Accounts.java         # token 读取（MMKV）+ 号池 + 定时校验
+            ├── Pow.java              # 宿主 native 优先 + 纯 Java 兜底
+            ├── DeepSeekClient.java   # direct 引擎（会话 / PoW / SSE / 上传）
             ├── Prompt.java           # ## System 段落拼接 + 协议提示词
-            ├── ToolKit.java          # DSML 解析 + 协议清洗 + 参数纠正
+            ├── ToolKit.java          # 工具调用解析（DSML / channel / 裸 JSON）+ 协议清洗
             ├── ChatRunner.java       # 协议归一化 + 单轮执行
             ├── LocalApiServer.java   # 本地 HTTP server + 双协议输出
-            ├── Notifier.java            # 宿主进程常驻状态通知（点击回到 DeepSeek）
             └── SettingsActivity.java
 ```
+
+> 图标说明：`res/mipmap-xxxhdpi/ic_launcher.jpg` 是实际打包用的图标。源文件 `软件图标.png` 的
+> 内容其实是 **JPEG**（文件头 `FF D8 FF E0`），若直接按 `.png` 放进 `res/` 会导致 AAPT 编译失败，
+> 因此按 `.jpg` 保存。换成真正的 PNG（带透明）时改回 `.png` 并同步 Manifest 即可。
 
 ---
 

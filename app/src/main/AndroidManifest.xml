@@ -14,7 +14,8 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/sym_def_app_icon"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="DeepSeek 本地API"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"

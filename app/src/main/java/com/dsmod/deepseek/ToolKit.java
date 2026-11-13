@@ -33,6 +33,12 @@ public final class ToolKit {
         public String arguments = "{}";
         public String raw = "";
         public int index;
+        /**
+         * Which syntax produced this call: channel / tooltoken / dsml / xml /
+         * barejson. Anything other than dsml means the model ignored the
+         * documented protocol, which is worth surfacing in the logs.
+         */
+        public String format = "";
     }
 
     private static final class Tag {
@@ -213,12 +219,28 @@ public final class ToolKit {
     /* ------------------------------------------------------------------ */
 
     public static List<Call> parseCalls(String text) {
-        // The App build emits native channel tokens (a different protocol from
-        // the web build), so try that shape first: it is unambiguous.
-        List<Call> calls = parseNativeChannelCalls(text);
-        if (calls.isEmpty()) calls = parseNativeToolTokenCalls(text);
-        if (calls.isEmpty()) calls = parseDsmlCalls(text);
-        if (calls.isEmpty()) calls = parseJsonToolCalls(text);
+        return parseCalls(text, null);
+    }
+
+    /**
+     * @param tools declared tools. Used ONLY to validate marker-less bare JSON:
+     *              a {"name":..,"args":..} line is indistinguishable from an
+     *              ordinary JSON example in the answer, so its name must match a
+     *              declared tool. Marked formats (DSML / channel / tool_call)
+     *              carry explicit protocol syntax and are trusted as-is, exactly
+     *              like fuckds does.
+     */
+    public static List<Call> parseCalls(String text, JSONArray tools) {
+        java.util.Set<String> names = collectToolNameSet(tools);
+        // Run EVERY parser and merge. Chaining them with `if (isEmpty())` lost
+        // calls whenever one reply mixed syntaxes (e.g. 3 DSML calls + 2 bare
+        // JSON ones): the first parser returned non-empty and the rest never ran.
+        List<Call> calls = new ArrayList<>();
+        calls.addAll(parseNativeChannelCalls(text));
+        calls.addAll(parseNativeToolTokenCalls(text));
+        calls.addAll(parseDsmlCalls(text));
+        calls.addAll(parseJsonToolCalls(text, names));
+        calls = dedupeCalls(calls);
         // Deliberately NOT deduped: in an agent loop the same call repeated
         // verbatim is normal (re-observe after every step). Dropping duplicates
         // turns a whole turn into an empty reply (fuckds v2.0.3). Only one
@@ -245,6 +267,7 @@ public final class ToolKit {
             if (call == null) continue;
             call.raw = text.substring(m.start(), end);
             call.index = m.start();
+            call.format = "tooltoken";
             calls.add(call);
         }
         return calls;
@@ -296,6 +319,7 @@ public final class ToolKit {
             call.arguments = args.toString();
             call.raw = text.substring(start, end);
             call.index = start;
+            call.format = "channel";
             calls.add(call);
             from = end;
         }
@@ -368,6 +392,11 @@ public final class ToolKit {
             int start = text.indexOf(token, from);
             if (start < 0) break;
             out.append(text, from, start);
+            // Keep a separator so removing the block does not glue the words
+            // on either side together in the visible thinking text.
+            if (out.length() > 0 && !Character.isWhitespace(out.charAt(out.length() - 1))) {
+                out.append(' ');
+            }
             int nl = text.indexOf('\n', start);
             int headerEnd = nl < 0 ? text.length() : nl;
             String header = text.substring(start + token.length(), headerEnd);
@@ -393,6 +422,52 @@ public final class ToolKit {
      * a missing parse here turns a valid tool call into an empty reply.
      */
     private static List<Call> parseJsonToolCalls(String text) {
+        return parseJsonToolCalls(text, null);
+    }
+
+    /**
+     * null = no declaration supplied (internal call), accept everything.
+     * An empty set means the client declared no tools at all, so a bare JSON
+     * object can never be a call — keep it as ordinary content.
+     */
+    private static boolean allowedName(String name, java.util.Set<String> names) {
+        if (names == null) return true;
+        return names.contains(name);
+    }
+
+    /**
+     * Remove exact duplicates produced by overlapping parsers. This is a
+     * same-reply dedupe only: the same call repeated in a later turn is a
+     * legitimate agent action and must never be dropped.
+     */
+    private static List<Call> dedupeCalls(List<Call> calls) {
+        if (calls == null || calls.size() < 2) return calls;
+        List<Call> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (Call c : calls) {
+            String key = c.name + "\u0000" + c.arguments;
+            if (!seen.add(key)) continue;
+            out.add(c);
+        }
+        return out;
+    }
+
+    /** Declared tool names, used to validate marker-less bare JSON calls. */
+    public static java.util.Set<String> collectToolNameSet(JSONArray tools) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (tools == null) return out;
+        for (int i = 0; i < tools.length(); i++) {
+            JSONObject tool = tools.optJSONObject(i);
+            if (tool == null) continue;
+            JSONObject fn = tool.optJSONObject("function");
+            if (fn == null) fn = tool;
+            String name = fn.optString("name", "").trim();
+            if (!name.isEmpty()) out.add(name);
+        }
+        return out;
+    }
+
+    private static List<Call> parseJsonToolCalls(String text, java.util.Set<String> names) {
         List<Call> calls = new ArrayList<>();
         if (text == null || text.isEmpty()) return calls;
         // <toolcall> and <tool_call> are both in use; normalise for matching
@@ -414,11 +489,34 @@ public final class ToolKit {
             if (call != null) calls.add(call);
         }
         if (calls.isEmpty()) {
-            // Bare JSON object with a name field and no wrapper tags.
-            String trimmed = work.trim();
-            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-                Call call = callFromJson(trimmed);
-                if (call != null) calls.add(call);
+            // Bare JSON objects: the App build prints each call as a plain
+            // {"name":..,"args":..} line, often several per reply. Scan line by
+            // line — the old whole-text check could only ever find one.
+            List<int[]> fences = codeFenceRanges(work);
+            int lineStart = 0;
+            while (lineStart <= work.length()) {
+                int nl = work.indexOf('\n', lineStart);
+                int lineEnd = nl < 0 ? work.length() : nl;
+                String t = work.substring(lineStart, lineEnd).trim();
+                // Fenced JSON is an example the model is showing, not a call.
+                if (!covered(fences, lineStart) && t.startsWith("{") && t.endsWith("}")) {
+                    Call call = callFromJson(t);
+                    if (call != null && allowedName(call.name, names)) {
+                        call.format = "barejson";
+                        calls.add(call);
+                    }
+                }
+                lineStart = nl < 0 ? work.length() + 1 : nl + 1;
+            }
+            if (calls.isEmpty()) {
+                String trimmed = work.trim();
+                if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                    Call call = callFromJson(trimmed);
+                    if (call != null && allowedName(call.name, names)) {
+                        call.format = "barejson";
+                        calls.add(call);
+                    }
+                }
             }
         }
         return calls;
@@ -430,6 +528,10 @@ public final class ToolKit {
             JSONObject obj = new JSONObject(body);
             String name = obj.optString("name", "").trim();
             if (name.isEmpty()) return null;
+            // A self-declared result is a fabrication, not a call: accepting it
+            // would make the client execute the tool a second time with empty
+            // arguments.
+            if (obj.has("result") || obj.has("output") || obj.has("tool_result")) return null;
             JSONObject args = obj.optJSONObject("arguments");
             if (args == null) args = obj.optJSONObject("args");
             if (args == null) args = obj.optJSONObject("parameters");
@@ -482,6 +584,7 @@ public final class ToolKit {
                 call.arguments = args.toString();
                 call.raw = text.substring(t.start, Math.min(bodyEnd, text.length()));
                 call.index = t.start;
+                call.format = "dsml";
                 calls.add(call);
             }
             i = next;
@@ -505,6 +608,7 @@ public final class ToolKit {
                 call.arguments = args.toString();
                 call.raw = text.substring(t.start);
                 call.index = t.start;
+                call.format = "dsml";
                 calls.add(call);
                 Logs.d(Logs.CHAT, TAG, "tool call recovered from truncated output: " + name);
                 break;
@@ -523,11 +627,19 @@ public final class ToolKit {
      * upstream risk control flags exactly that pattern.
      */
     public static String scrubProtocol(String text) {
+        return scrubProtocol(text, null);
+    }
+
+    public static String scrubProtocol(String text, java.util.Set<String> names) {
         if (text == null || text.isEmpty()) return text;
         String s = removeNativeChannelBlocks(text);
         s = removeNativeToolTokenBlocks(s);
         s = removeDsmlBlocks(s);
         s = removeToolCallBlocks(s);
+        // Bare JSON is only stripped when the declared tool names are known.
+        // For the assembled prompt (names == null) the ## FTC history lines
+        // are legitimate content and must stay.
+        if (names != null && !names.isEmpty()) s = removeBareCallLines(s, names);
         s = removeEndTokens(s);
         return s;
     }
@@ -538,9 +650,39 @@ public final class ToolKit {
      */
     private static String removeToolCallBlocks(String text) {
         if (text == null || text.isEmpty()) return text;
-        String s = text.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*?<\\s*/\\s*tool_?call\\s*>", "");
-        s = s.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*$", "");
+        String s = text.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*?<\\s*/\\s*tool_?call\\s*>", " ");
+        s = s.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*$", " ");
         return s;
+    }
+
+    /**
+     * Markdown fenced-code ranges (``` ... ```). JSON inside a fence is an
+     * example the model is showing to the user, never a live tool call.
+     */
+    private static List<int[]> codeFenceRanges(String text) {
+        List<int[]> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) return out;
+        int i = 0;
+        while (i < text.length()) {
+            int open = text.indexOf("```", i);
+            if (open < 0) break;
+            int close = text.indexOf("```", open + 3);
+            int end = close < 0 ? text.length() : close + 3;
+            out.add(new int[]{open, end});
+            i = end;
+        }
+        return out;
+    }
+
+    /** A bare JSON object that declares its own tool result (fabricated). */
+    private static boolean looksLikeFabricatedResult(String json) {
+        try {
+            JSONObject o = new JSONObject(json);
+            if (!o.has("name")) return false;
+            return o.has("result") || o.has("output") || o.has("tool_result");
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**
@@ -549,23 +691,72 @@ public final class ToolKit {
      * wrapper tag, and that text must never reach the client as content.
      */
     private static String removeBareCallLines(String text) {
+        return removeBareCallLines(text, null);
+    }
+
+    /**
+     * Drop bare tool-call JSON lines. With a name set, only declared tool names
+     * are treated as calls — otherwise ordinary JSON in an answer (a config
+     * sample, an API example) would be deleted.
+     */
+    private static String removeBareCallLines(String text, java.util.Set<String> names) {
         if (text == null || text.isEmpty()) return text;
+        List<int[]> fences = codeFenceRanges(text);
         StringBuilder out = new StringBuilder();
-        for (String line : text.split("\n", -1)) {
+        int lineStart = 0;
+        while (lineStart <= text.length()) {
+            int nl = text.indexOf('\n', lineStart);
+            int lineEnd = nl < 0 ? text.length() : nl;
+            String line = text.substring(lineStart, lineEnd);
             String t = line.trim();
-            if (t.startsWith("{") && t.endsWith("}") && callFromJson(t) != null) continue;
-            out.append(line).append('\n');
+            // JSON inside a code fence is an example, not a call.
+            boolean inFence = covered(fences, lineStart);
+            if (!inFence) {
+                if (t.startsWith("{") && t.endsWith("}")) {
+                    // Drop a fabricated result line entirely, and drop real calls.
+                    if (looksLikeFabricatedResult(t)) {
+                        lineStart = nl < 0 ? text.length() + 1 : nl + 1;
+                        continue;
+                    }
+                    Call c = callFromJson(t);
+                    if (c != null && allowedName(c.name, names)) {
+                        lineStart = nl < 0 ? text.length() + 1 : nl + 1;
+                        continue;
+                    }
+                }
+                // Also handle a call printed after a prefix ("结果：{\"name\":...").
+                int jsonAt = t.indexOf("{\"name\"");
+                if (jsonAt >= 0) {
+                    int end = readJsonEnd(t, jsonAt);
+                    if (end > 0) {
+                        Call c = callFromJson(t.substring(jsonAt, end));
+                        if (c != null && allowedName(c.name, names)) {
+                            String prefix = t.substring(0, jsonAt).trim();
+                            if (!prefix.isEmpty()) out.append(prefix).append('\n');
+                            lineStart = nl < 0 ? text.length() + 1 : nl + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            out.append(line);
+            if (nl >= 0) out.append('\n');
+            lineStart = nl < 0 ? text.length() + 1 : nl + 1;
         }
         return out.toString();
     }
 
     public static String stripMarkup(String text) {
+        return stripMarkup(text, null);
+    }
+
+    public static String stripMarkup(String text, java.util.Set<String> names) {
         if (text == null || text.isEmpty()) return "";
         String s = removeNativeChannelBlocks(text);
         s = removeNativeToolTokenBlocks(s);
         s = removeDsmlBlocks(s);
         s = removeToolCallBlocks(s);
-        s = removeBareCallLines(s);
+        s = removeBareCallLines(s, names);
         s = removeEndTokens(s);
         s = removeProtocolLines(s);
         s = s.replaceAll("```[a-zA-Z0-9_+-]*[ \\t]*\\r?\\n[ \\t]*\\r?\\n?[ \\t]*```(\\r?\\n)?", "");
@@ -695,11 +886,25 @@ public final class ToolKit {
      */
     public static final class StreamFilter {
         private final StringBuilder pending = new StringBuilder();
+        /** Declared tool names; bare JSON is only dropped when the name matches. */
+        private final java.util.Set<String> toolNames;
         private boolean droppingDsml = false;
-        /** Skipping the JSON line that follows a native <|channel|> tool header. */
+
+        public StreamFilter() {
+            this(null);
+        }
+
+        public StreamFilter(java.util.Set<String> toolNames) {
+            this.toolNames = toolNames;
+        }
+        /** Skipping the JSON body that follows a native <|channel|> tool header. */
         private boolean droppingNative = false;
         /** Inside a <toolcall> / <tool_call> block. */
         private boolean droppingToolCall = false;
+        /** JSON nesting depth while droppingNative is active (multi-line args). */
+        private int nativeDepth = 0;
+        /** Inside a ``` fence: example content, pass through untouched. */
+        private boolean inFence = false;
 
         public String push(String delta) {
             if (delta == null || delta.isEmpty()) return "";
@@ -716,13 +921,31 @@ public final class ToolKit {
             // still stream. Keep a short tail that may start a protocol tag.
             // Text before the first '<' is always safe, even on one long line,
             // otherwise a whole single-line answer would be held back.
-            if (!droppingDsml && pending.length() > 24) {
+            // While a protocol block is being swallowed nothing may be released:
+            // a long JSON argument line used to leak its first N chars here,
+            // before the newline let filterLine recognise and drop it.
+            if (!droppingDsml && !droppingNative && !droppingToolCall && !inFence
+                    && pending.length() > 24) {
                 int lt = pending.indexOf("<");
                 if (lt < 0) {
-                    if (pending.length() > 64) {
-                        int cut = pending.length() - 16;
-                        out.append(pending, 0, cut);
-                        pending.delete(0, cut);
+                    // Hold anything that may be a bare tool-call JSON until the
+                    // newline lets filterLine decide: at line start, or after a
+                    // prefix like "结果：{\"name\":...". Otherwise the first N
+                    // chars leak to the client before the newline arrives.
+                    int jsonAt = pending.indexOf("{\"name\"");
+                    if (jsonAt == 0) {
+                        // whole pending is the start of a bare call: hold it
+                    } else if (jsonAt > 0) {
+                        out.append(pending, 0, jsonAt);
+                        pending.delete(0, jsonAt);
+                    } else {
+                        char first = pending.charAt(0);
+                        boolean maybeJson = first == '{' || first == '[';
+                        if (!maybeJson && pending.length() > 64) {
+                            int cut = pending.length() - 16;
+                            out.append(pending, 0, cut);
+                            pending.delete(0, cut);
+                        }
                     }
                 } else if (lt > 0) {
                     out.append(pending, 0, lt);
@@ -742,18 +965,36 @@ public final class ToolKit {
 
         private String filterLine(String line) {
             String trimmed = line.trim();
+            // Markdown fence: everything inside is example content, never a
+            // live call, so pass it through untouched.
+            if (trimmed.startsWith("```")) {
+                inFence = !inFence;
+                return line;
+            }
+            if (inFence) return line;
             // Native channel tool tokens (App build only): drop the header line
             // and the JSON argument line that follows it.
             if (trimmed.contains("<|channel|>") || trimmed.contains("<|constrain|>")) {
                 // Header line is always protocol. Only a tool header is followed
-                // by a JSON argument line; <|channel|>final is a plain marker.
+                // by a JSON body; <|channel|>final is a plain marker.
                 droppingNative = trimmed.contains("to=functions.");
+                nativeDepth = 0;
                 return null;
             }
             if (droppingNative) {
                 if (trimmed.isEmpty()) return null;
-                droppingNative = false;
-                if (trimmed.startsWith("{") || trimmed.startsWith("[")) return null;
+                // Count braces so multi-line arguments are swallowed whole, not
+                // just the first line.
+                for (int i = 0; i < trimmed.length(); i++) {
+                    char c = trimmed.charAt(i);
+                    if (c == '{' || c == '[') nativeDepth++;
+                    else if (c == '}' || c == ']') nativeDepth--;
+                }
+                if (nativeDepth <= 0) {
+                    droppingNative = false;
+                    nativeDepth = 0;
+                }
+                return null;
             }
             if (trimmed.startsWith("<|")) {
                 // <|tool▁calls▁begin|> style token: its JSON body follows on the
@@ -771,10 +1012,24 @@ public final class ToolKit {
                 if (trimmed.contains("</")) droppingToolCall = false;
                 return null;
             }
-            // A whole line that is a bare tool-call JSON object.
-            if (trimmed.startsWith("{") && trimmed.endsWith("}")
-                    && callFromJson(trimmed) != null) {
-                return null;
+            // A bare tool-call JSON object, either alone or after a prefix
+            // such as "结果：{\"name\":...". Drop the JSON, keep the prefix.
+            int jsonAt = trimmed.indexOf("{\"name\"");
+            if (jsonAt >= 0) {
+                int end = readJsonEnd(trimmed, jsonAt);
+                if (end > 0) {
+                    String json = trimmed.substring(jsonAt, end);
+                    // Fabricated result lines never reach the client either.
+                    if (looksLikeFabricatedResult(json)) {
+                        String prefix = trimmed.substring(0, jsonAt).trim();
+                        return prefix.isEmpty() ? null : prefix + "\n";
+                    }
+                    Call c = callFromJson(json);
+                    if (c != null && allowedName(c.name, toolNames)) {
+                        String prefix = trimmed.substring(0, jsonAt).trim();
+                        return prefix.isEmpty() ? null : prefix + "\n";
+                    }
+                }
             }
             if (droppingDsml) {
                 if (trimmed.contains("</") && (trimmed.contains("DSML")
@@ -1001,6 +1256,18 @@ public final class ToolKit {
             }
             if (t.matches("^#{1,4}\\s*(System|User|Assistant|Tool_calls|Tool_call_result|Tool_functions|Messages)\\s*[:\uFF1A]?\\s*$")) {
                 return true;
+            }
+            // A bare JSON object carrying its own result field is a fabricated
+            // tool result: results are written by the system, never by the model.
+            int jsonAt = t.indexOf("{\"name\"");
+            if (jsonAt >= 0) {
+                int end = readJsonEnd(t, jsonAt);
+                if (end > 0) {
+                    try {
+                        JSONObject o = new JSONObject(t.substring(jsonAt, end));
+                        if (o.has("result") || o.has("output") || o.has("tool_result")) return true;
+                    } catch (Throwable ignore) { }
+                }
             }
         }
         return false;

@@ -426,12 +426,17 @@ public final class ChatRunner {
             fileIds.add(id);
         }
 
+        // Bare-JSON tool calls are only recognised when the name matches a
+        // declared tool, so both the parsers and the stream filters need the
+        // declaration list. Ordinary JSON in an answer (a config sample, an API
+        // example) must never be deleted as if it were a call.
+        final java.util.Set<String> toolNames = ToolKit.collectToolNameSet(req.tools);
         final ToolKit.StreamFilter contentFilter =
-                sink == null ? null : new ToolKit.StreamFilter();
+                sink == null ? null : new ToolKit.StreamFilter(toolNames);
         // Separate filter instance: the reasoning stream must not share the
         // dropping state of the content stream.
         final ToolKit.StreamFilter reasoningFilter =
-                sink == null ? null : new ToolKit.StreamFilter();
+                sink == null ? null : new ToolKit.StreamFilter(toolNames);
         DeepSeekClient.Sink inner = new DeepSeekClient.Sink() {
             @Override
             public void onReasoning(String delta) {
@@ -465,10 +470,10 @@ public final class ChatRunner {
 
         // Tool calls may live in the content stream, in the thinking block, or
         // split across both; search them independently so nothing is missed.
-        List<ToolKit.Call> calls = ToolKit.parseCalls(reply.content);
+        List<ToolKit.Call> calls = ToolKit.parseCalls(reply.content, req.tools);
         String callSource = calls.isEmpty() ? "none" : "content";
         if (calls.isEmpty() && !result.reasoning.isEmpty()) {
-            calls = ToolKit.parseCalls(result.reasoning);
+            calls = ToolKit.parseCalls(result.reasoning, req.tools);
             if (!calls.isEmpty()) callSource = "reasoning";
         }
         List<ToolKit.Call> coerced = new ArrayList<>();
@@ -483,12 +488,12 @@ public final class ChatRunner {
         result.toolCalls = coerced;
         String rawContent = reply.content == null ? "" : reply.content;
         String rawThinking = result.reasoning == null ? "" : result.reasoning;
-        String visible = ToolKit.stripMarkup(rawContent);
+        String visible = ToolKit.stripMarkup(rawContent, toolNames);
         // Reasoning only loses protocol tokens, never whole lines: stripMarkup
         // also drops RESULT:/DO:/section-header lines, which are ordinary prose
         // inside a thinking block. That silently ate ~2k chars per turn
         // (log: completion reasoning_chars=7590 -> extract reasoning_chars=5620).
-        String thinking = ToolKit.scrubProtocol(rawThinking);
+        String thinking = ToolKit.scrubProtocol(rawThinking, toolNames);
         if (thinking.length() > 0) {
             thinking = thinking.replaceAll("\\n{3,}", "\\n\\n").trim();
         }
@@ -514,10 +519,16 @@ public final class ChatRunner {
         }
 
         StringBuilder names = new StringBuilder();
+        int downgraded = 0;
         for (int i = 0; i < result.toolCalls.size(); i++) {
             if (i > 0) names.append(',');
             ToolKit.Call c = result.toolCalls.get(i);
-            names.append(c.name).append('(').append(c.arguments.length()).append("B)");
+            names.append(c.name).append('(').append(c.arguments.length()).append('B');
+            if (!c.format.isEmpty()) {
+                names.append(',').append(c.format);
+                if (!"dsml".equals(c.format)) downgraded++;
+            }
+            names.append(')');
         }
         result.elapsedMs = System.currentTimeMillis() - start;
         // One closing line per request: what came back, where it came from, and
@@ -535,6 +546,18 @@ public final class ChatRunner {
         for (int i = 0; i < result.toolCalls.size(); i++) {
             ToolKit.Call c = result.toolCalls.get(i);
             Logs.d(Logs.CHAT, TAG, "tool args " + c.name + ": " + preview(c.arguments, 120));
+        }
+        // Two failure modes that used to be invisible: the model ignored the
+        // documented call syntax, or it invented a tool result on its own.
+        Stats.TOOL_CALLS.addAndGet(result.toolCalls.size());
+        if (downgraded > 0) {
+            Stats.TOOL_DOWNGRADED.addAndGet(downgraded);
+            Logs.w(Logs.CHAT, TAG, "format downgrade: " + downgraded + "/" + result.toolCalls.size()
+                    + " calls used non-DSML syntax (model ignored the documented protocol)");
+        }
+        if (result.fabricated) {
+            Stats.FABRICATED.incrementAndGet();
+            Logs.w(Logs.CHAT, TAG, "fabricated tool result detected; result text was stripped");
         }
         return result;
     }

@@ -157,7 +157,10 @@ Output discipline:
                 // still carries DSML / native channel tokens becomes a template it
                 // imitates, and it is exactly the pattern upstream risk control
                 // looks for. fuckds keeps history protocol-free for the same reason.
-                String text = ToolKit.stripMarkup(contentToText(msg.opt("content")));
+                // scrubProtocol, not stripMarkup: history must lose protocol
+                // syntax but keep ordinary JSON (a previous answer may contain a
+                // config or API example that is real content).
+                String text = ToolKit.scrubProtocol(contentToText(msg.opt("content")));
                 if (!text.trim().isEmpty()) {
                     Part p = new Part("assistant");
                     p.lines.add(text);
@@ -328,7 +331,7 @@ Output discipline:
                 } catch (Throwable t) {
                     // arguments were not JSON: strip any protocol markup before it
                     // reaches the prompt, otherwise the raw call syntax leaks.
-                    String cleaned = ToolKit.stripMarkup(args);
+                    String cleaned = ToolKit.scrubProtocol(args);
                     if (!cleaned.trim().isEmpty()) parsedArgs.put("input", cleaned);
                 }
             }
@@ -341,7 +344,7 @@ Output discipline:
         JSONObject out = new JSONObject();
         try {
             out.put("name", name);
-            out.put("result", result == null ? "" : ToolKit.stripMarkup(result));
+            out.put("result", result == null ? "" : ToolKit.scrubProtocol(result));
         } catch (Throwable ignore) { }
         return out.toString();
     }

@@ -43,6 +43,15 @@ h1 em{font-style:normal;background:linear-gradient(90deg,var(--cyan),var(--viole
 table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto}
 th{color:var(--muted);font-weight:500;text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);white-space:normal}
 td{padding:9px 8px;border-bottom:1px solid rgba(122,182,255,.08);white-space:normal;word-break:break-all;vertical-align:top}
+/* Phones: a 7-column table is unreadable, stack each row as a card. */
+@media (max-width:640px){
+  table.acc thead{display:none}
+  table.acc,table.acc tbody,table.acc tr,table.acc td{display:block;width:auto}
+  table.acc tr{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0 0 10px;background:rgba(122,182,255,.03)}
+  table.acc td{border:none;padding:3px 0;display:flex;gap:10px}
+  table.acc td:before{content:attr(data-label);color:var(--muted);min-width:64px;flex:0 0 auto}
+  table.acc td:last-child{padding-top:8px}
+}
 tbody tr:hover td{background:rgba(34,211,238,.05)}
 .tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;border:1px solid var(--line)}
 .tag.ok{color:var(--green);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.1)}
@@ -176,11 +185,23 @@ async function load(){
   }
   try{
     var a = await j('/admin/api/accounts');
-    var h = '<table><thead><tr><th>#</th><th>Token</th><th>状态</th><th>校验</th><th>请求</th><th>冷却</th><th>最近错误</th><th></th></tr></thead><tbody>';
+    var h = '<table class="acc"><thead><tr><th>#</th><th>Token</th><th>状态</th><th>校验</th><th>请求</th><th>冷却</th><th>最近错误</th><th></th></tr></thead><tbody>';
     (a.accounts||[]).forEach(function(x){
-      var st = x.authFailed?'<span class="tag err">已停用</span>':(x.cooldownMs>0?'<span class="tag warn">冷却中</span>':'<span class="tag ok">可用</span>');
+      var st = x.authFailed
+        ? '<span class="tag err">已停用</span>'
+          + (x.disabledReason ? '<div class="muted">'+esc(x.disabledReason)+'</div>' : '')
+        : (x.cooldownMs>0?'<span class="tag warn">冷却中</span>':'<span class="tag ok">可用</span>');
       var vv = x.verified ? ('<span class="muted">'+esc(x.verifyDetail||'')+'<br>'+fmtTime(x.lastVerifiedAt)+'</span>') : '<span class="muted">未校验</span>';
-      h += '<tr><td>'+(x.current?'★ ':'')+x.index+'</td><td>'+esc(x.token)+'</td><td>'+st+'</td><td>'+vv+'</td><td>'+x.requests+'</td><td>'+fmtCool(x.cooldownMs)+'</td><td>'+esc(x.lastError||'-')+'</td><td><button class="danger" onclick="removeToken('+x.index+')">删除</button></td></tr>';
+      h += '<tr>'
+        + '<td data-label="#">'+(x.current?'★ ':'')+x.index+'</td>'
+        + '<td data-label="Token">'+esc(x.token)+'</td>'
+        + '<td data-label="状态">'+st+'</td>'
+        + '<td data-label="校验">'+vv+'</td>'
+        + '<td data-label="请求">'+x.requests+'</td>'
+        + '<td data-label="冷却">'+fmtCool(x.cooldownMs)+'</td>'
+        + '<td data-label="最近错误">'+esc(x.lastError||'-')+'</td>'
+        + '<td><button class="danger" onclick="removeToken('+x.index+')">删除</button></td>'
+        + '</tr>';
     });
     h += '</tbody></table>';
     if(a.token_error){ h += '<p class="muted">Token 读取失败：'+esc(a.token_error)+'</p>'; }

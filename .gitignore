@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio / IntelliJ
+*.iml
+.idea/
+local.properties
+
+# Signing material — never commit a keystore
+*.keystore
+*.jks
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+
+# OS noise
+.DS_Store
+Thumbs.db

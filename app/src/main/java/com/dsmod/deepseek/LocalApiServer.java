@@ -92,6 +92,11 @@ public final class LocalApiServer {
             o.put("thinking", Config.thinking);
             o.put("requests", REQUESTS.get());
             o.put("errors", ERRORS.get());
+            // Cumulative tool-call health since startup: a rising
+            // tool_downgraded means the model keeps ignoring the protocol.
+            o.put("tool_calls", Stats.TOOL_CALLS.get());
+            o.put("tool_downgraded", Stats.TOOL_DOWNGRADED.get());
+            o.put("fabricated", Stats.FABRICATED.get());
             o.put("last_error", lastError);
             o.put("last_error_kind", lastErrorKind);
             o.put("uptime_sec", startedAtWall == 0L ? 0L

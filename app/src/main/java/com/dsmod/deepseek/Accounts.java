@@ -60,6 +60,8 @@ public final class Accounts {
         String lastError = "";
         long lastVerifiedAt = 0L;
         String verifyDetail = "";
+        /** Why this account is currently disabled ("" when usable). */
+        String disabledReason = "";
     }
 
     /** Result of a live token check. */
@@ -159,8 +161,11 @@ public final class Accounts {
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
+                // Verify right after startup, not 60s later: until the first
+                // check every account only looks usable, so a dead token would
+                // still be picked and fail the first request.
                 try {
-                    Thread.sleep(60_000L);
+                    Thread.sleep(3_000L);
                 } catch (InterruptedException e) {
                     return;
                 }
@@ -172,6 +177,8 @@ public final class Accounts {
                             for (String tok : tokens) {
                                 verifyAndRecord(tok);
                             }
+                            Logs.i(Logs.ACCOUNT, TAG, "auto verify done active="
+                                    + activeCount() + "/" + tokens.length);
                         }
                     } catch (Throwable ignore) { }
                     try {
@@ -273,7 +280,9 @@ public final class Accounts {
             e.cooldownUntil = System.currentTimeMillis() + AUTH_INVALID_COOLDOWN_MS;
             e.lastError = message == null ? "auth_expired" : message;
             e.lastErrorAt = System.currentTimeMillis();
-            Logs.w(Logs.ACCOUNT, TAG, "account disabled (auth): " + mask(token));
+            e.disabledReason = "auth: " + e.lastError;
+            Logs.w(Logs.ACCOUNT, TAG, "account disabled (auth): " + mask(token)
+                    + " reason=" + e.lastError);
         }
     }
 
@@ -377,10 +386,12 @@ public final class Accounts {
                     e.cooldownUntil = 0L;
                     e.lastError = "";
                     e.lastErrorAt = 0L;
+                    e.disabledReason = "";
                 } else {
                     e.authFailed = true;
                     e.lastError = "verify: " + vr.detail;
                     e.lastErrorAt = now;
+                    e.disabledReason = "verify: " + vr.detail;
                 }
                 break;
             }
@@ -473,6 +484,7 @@ public final class Accounts {
                     o.put("lastVerifiedAt", e.lastVerifiedAt);
                     o.put("verifyDetail", e.verifyDetail);
                     o.put("verified", e.lastVerifiedAt > 0);
+                    o.put("disabledReason", e.disabledReason);
                 } catch (Throwable ignore) { }
                 arr.put(o);
             }
