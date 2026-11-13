@@ -116,6 +116,9 @@ public final class ToolKit {
             if (name.isEmpty() || rest.startsWith("=")) {
                 name = "dsml";
                 sp = 0;
+            } else if (name.startsWith("_")) {
+                // <dsml_tool_call name="tool"> / <dsml_invoke ...> / <dsml_calls>
+                name = "dsml";
             }
             if (!(name.equals("calls") || name.equals("tool_calls")
                     || name.equals("invoke") || name.equals("parameter")
@@ -553,6 +556,49 @@ public final class ToolKit {
         }
     }
 
+    /** JSON from an attribute or body, tolerating HTML entities and noise. */
+    private static JSONObject parseJsonLoose(String raw) {
+        JSONObject out = new JSONObject();
+        if (raw == null || raw.isEmpty()) return out;
+        String s = raw.replace("&quot;", "\"")
+                .replace("&#39;", "'").replace("&apos;", "'")
+                .replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&amp;", "&");
+        int a = s.indexOf('{');
+        int b = s.lastIndexOf('}');
+        if (a < 0 || b <= a) return out;
+        try {
+            return new JSONObject(s.substring(a, b + 1));
+        } catch (Throwable ignore) {
+            return out;
+        }
+    }
+
+    /** <path>v</path><recursive>false</recursive> -> {"path":"v","recursive":false} */
+    private static JSONObject xmlArgsToJson(String body) {
+        JSONObject out = new JSONObject();
+        if (body == null || body.isEmpty()) return out;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<([A-Za-z0-9_.\\-]+)>([\\s\\S]*?)</\\1>")
+                .matcher(body);
+        while (m.find()) {
+            String k = m.group(1);
+            String v = m.group(2).trim();
+            try {
+                if ("true".equalsIgnoreCase(v) || "false".equalsIgnoreCase(v)) {
+                    out.put(k, Boolean.parseBoolean(v));
+                } else if (v.matches("-?\\d{1,18}")) {
+                    out.put(k, Long.parseLong(v));
+                } else if (v.matches("-?\\d+\\.\\d+")) {
+                    out.put(k, Double.parseDouble(v));
+                } else {
+                    out.put(k, v);
+                }
+            } catch (Throwable ignore) { }
+        }
+        return out;
+    }
+
     private static List<Call> parseDsmlCalls(String text) {
         List<Call> calls = new ArrayList<>();
         if (text == null || text.isEmpty()) return calls;
@@ -579,13 +625,23 @@ public final class ToolKit {
             String name = t.attrs.get("name");
             name = name == null ? "" : name.trim();
             if (isDsml) {
-                // <dsml name="tool">{json}</dsml> — the body is the raw arguments.
+                // Arguments arrive three different ways; the model uses all of
+                // them within a single conversation:
+                //   <dsml name="t" args='{"a":1}'>   attribute (JSON)
+                //   <dsml name="t">{"a":1}</dsml>     JSON body
+                //   <dsml name="t"><a>1</a></dsml>     XML body
                 String dsmlBody = text.substring(t.end, bodyEnd).trim();
                 JSONObject dsmlArgs = new JSONObject();
-                if (dsmlBody.startsWith("{")) {
-                    try {
-                        dsmlArgs = new JSONObject(dsmlBody);
-                    } catch (Throwable ignore) { }
+                String attrArgs = t.attrs.get("args");
+                if (attrArgs == null || attrArgs.trim().isEmpty()) {
+                    attrArgs = t.attrs.get("arguments");
+                }
+                if (attrArgs != null && !attrArgs.trim().isEmpty()) {
+                    dsmlArgs = parseJsonLoose(attrArgs.trim());
+                } else if (dsmlBody.startsWith("{")) {
+                    dsmlArgs = parseJsonLoose(dsmlBody);
+                } else if (dsmlBody.startsWith("<")) {
+                    dsmlArgs = xmlArgsToJson(dsmlBody);
                 }
                 if (!name.isEmpty()) {
                     Call call = new Call();

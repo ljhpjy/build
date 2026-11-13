@@ -507,6 +507,11 @@ public final class ChatRunner {
         // inside a thinking block. That silently ate ~2k chars per turn
         // (log: completion reasoning_chars=7590 -> extract reasoning_chars=5620).
         String thinking = ToolKit.scrubProtocol(rawThinking, toolNames);
+        // Echo guard: once the history carries a previous assistant turn, the
+        // model re-emits the tail of that turn as the head of its new thinking.
+        // The client then shows the same fragment again after every tool call,
+        // which reads as "thinking cut in half". Strip the echo.
+        thinking = stripEcho(thinking, lastAssistantText(req));
         if (thinking.length() > 0) {
             thinking = thinking.replaceAll("\\n{3,}", "\\n\\n").trim();
         }
@@ -602,6 +607,44 @@ public final class ChatRunner {
             i += needle.length();
         }
         return n;
+    }
+
+    /**
+     * Remove a leading echo of the previous assistant turn from the reasoning.
+     * The model copies the last N characters it just saw, so match the longest
+     * suffix of {@code previous} that prefixes {@code thinking}.
+     */
+    private static String stripEcho(String thinking, String previous) {
+        if (thinking == null || thinking.isEmpty()) return thinking;
+        if (previous == null) return thinking;
+        String prev = previous.trim();
+        if (prev.length() < 8) return thinking;
+        int max = Math.min(240, prev.length());
+        for (int n = max; n >= 8; n--) {
+            String suffix = prev.substring(prev.length() - n);
+            if (thinking.startsWith(suffix)) {
+                String out = thinking.substring(n).trim();
+                Logs.d(Logs.CHAT, TAG, "reasoning echo stripped chars=" + n);
+                return out;
+            }
+        }
+        return thinking;
+    }
+
+    /** Text of the most recent assistant message, used for echo detection. */
+    private static String lastAssistantText(Request req) {
+        try {
+            JSONArray msgs = req == null ? null : req.messages;
+            if (msgs == null) return "";
+            for (int i = msgs.length() - 1; i >= 0; i--) {
+                JSONObject m = msgs.optJSONObject(i);
+                if (m == null) continue;
+                if (!"assistant".equals(m.optString("role"))) continue;
+                String c = m.optString("content", "");
+                if (c != null && !c.isEmpty()) return c;
+            }
+        } catch (Throwable ignore) { }
+        return "";
     }
 
     /** First N chars of a collapsed single line, for debug logs. */

@@ -336,7 +336,7 @@ public final class DeepSeekClient {
                         }
                         frameCount++;
                         handleFrame(state, event, frame);
-                        emitDeltas(state, sink, sent);
+                        emitDeltas(state, sink, sent, false);
                         event = null;
                         data.setLength(0);
                     }
@@ -350,7 +350,7 @@ public final class DeepSeekClient {
             }
             if (data.length() > 0) {
                 handleFrame(state, event, data.toString().trim());
-                emitDeltas(state, sink, sent);
+                emitDeltas(state, sink, sent, true);
             }
         } catch (ApiException e) {
             throw e;
@@ -376,21 +376,65 @@ public final class DeepSeekClient {
      * fragments but never pushed them, so the client saw an empty response
      * while the non-streaming path (which reads collect() at the end) worked.
      */
-    private static void emitDeltas(State state, Sink sink, int[] sent) {
+    private static void emitDeltas(State state, Sink sink, int[] sent, boolean force) {
         if (sink == null) return;
         // Reasoning first: the thinking block must always precede the answer.
         // fuckds enforces the same order by holding the first content delta
         // (REASONING_HOLD_MS) instead of letting content overtake thinking.
         String think = collect(state, "THINK");
+        // A REPLACE patch rebuilds the fragment list, so sent[1] no longer
+        // describes what the client already holds. Length alone is not enough:
+        // the rebuilt buffer can even be longer, and then substring(sent[1])
+        // starts in the middle and the client shows a duplicated tail of the
+        // thinking block after every tool call. Compare the prefix and resync
+        // without replaying.
+        if (think.length() < sent[1] || !think.startsWith(state.sentThink.toString())) {
+            int common = commonPrefix(think, state.sentThink);
+            Logs.w(Logs.UPSTREAM, TAG, "think rebuilt sent=" + sent[1] + " now=" + think.length()
+                    + " common=" + common + "; resync without replay");
+            sent[1] = common;
+            state.sentThink.setLength(common);
+        }
         if (think.length() > sent[1]) {
-            sink.onReasoning(think.substring(sent[1]));
+            String delta = think.substring(sent[1]);
+            sink.onReasoning(delta);
+            state.sentThink.append(delta);
             sent[1] = think.length();
+            state.lastThinkAt = System.currentTimeMillis();
         }
         String content = collect(state, "RESPONSE");
+        if (content.length() < sent[0] || !content.startsWith(state.sentContent.toString())) {
+            int common = commonPrefix(content, state.sentContent);
+            Logs.w(Logs.UPSTREAM, TAG, "content rebuilt sent=" + sent[0] + " now=" + content.length()
+                    + " common=" + common + "; resync without replay");
+            sent[0] = common;
+            state.sentContent.setLength(common);
+        }
         if (content.length() > sent[0]) {
-            sink.onContent(content.substring(sent[0]));
+            // Upstream interleaves thinking and answer frames: the tool call
+            // shows up while the model is still thinking, so forwarding it at
+            // once cuts the thinking block in half and the client renders
+            // "thinking / tool call / rest of the thinking". Hold content until
+            // thinking has been quiet for REASONING_HOLD_MS, or until the
+            // stream ends (force). Same trick as fuckds REASONING_HOLD_MS.
+            final long holdMs = 600L;
+            long last = state.lastThinkAt;
+            if (!force && last > 0 && System.currentTimeMillis() - last < holdMs) {
+                return;
+            }
+            String delta = content.substring(sent[0]);
+            sink.onContent(delta);
+            state.sentContent.append(delta);
             sent[0] = content.length();
         }
+    }
+
+    /** Length of the shared prefix between a String and a StringBuilder. */
+    private static int commonPrefix(String a, StringBuilder b) {
+        int n = Math.min(a.length(), b.length());
+        int i = 0;
+        while (i < n && a.charAt(i) == b.charAt(i)) i++;
+        return i;
     }
 
     private void handleFrame(State state, String event, String text) throws ApiException {
@@ -429,6 +473,16 @@ public final class DeepSeekClient {
         long firstTokenAt = 0;
         /** Text appended before any fragment existed; recovered as RESPONSE. */
         String orphan = "";
+        /**
+         * Exactly what was already forwarded to the client. A REPLACE patch
+         * rebuilds the fragment list, which invalidates pure length
+         * bookkeeping: the prefix comparison is what stops a rebuilt buffer
+         * from replaying its tail after every tool call.
+         */
+        final StringBuilder sentThink = new StringBuilder();
+        final StringBuilder sentContent = new StringBuilder();
+        /** Last time the thinking block grew, used to hold content back. */
+        long lastThinkAt = 0L;
     }
 
     private static void parseFragments(JSONArray arr, List<Fragment> out) {

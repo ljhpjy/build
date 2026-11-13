@@ -271,7 +271,11 @@ public final class Logs {
                 "(?i)((?:token|authorization|api[_-]?key|cookie|set-cookie)(?:[\\\"']?\\s*[:=]\\s*[\\\"']?))([A-Za-z0-9._\\-+/=]{6,})",
                 "$1****");
         s = s.replaceAll("sk-[A-Za-z0-9]{10,}", "sk-****");
+        // Tool names look like mcp__server__tool and must survive masking:
+        // they are the only way to tell which tool the model really called.
+        s = s.replaceAll("([A-Za-z0-9_]+__[A-Za-z0-9_]+)", "\u0001$1\u0001");
         s = s.replaceAll("[A-Za-z0-9_\\-]{28,}", "****");
+        s = s.replaceAll("\u0001", "");
         return s;
     }
 

@@ -42,6 +42,21 @@ public final class Prompt {
 
     /** Same as fuckds: intentionally empty, the prompt handles it. */
     public static final String FINAL_ANSWER_HINT = "";
+    /**
+     * The single accepted call syntax. Without an explicit template the model
+     * kept inventing variants in one conversation: <dsml_tool_call>, attribute
+     * only args=, XML children, and empty invocations. Every wrong shape costs
+     * a whole extra round trip, so spell it out next to the declarations.
+     */
+    private static final String TOOL_CALL_FORMAT =
+            "Call syntax — output exactly one block, nothing before or after it:\n"
+            + "<\uFF5CDSML\uFF5Cinvoke name=\"TOOL_NAME\">\n"
+            + "<\uFF5CDSML\uFF5Cparameter name=\"ARG_NAME\">ARG_VALUE</\uFF5CDSML\uFF5Cparameter>\n"
+            + "</\uFF5CDSML\uFF5Cinvoke>\n"
+            + "Rules: use a tool name exactly as listed above; emit one parameter "
+            + "tag per argument and fill in the real value; never emit an empty "
+            + "invocation; never invent other tag names (dsml_tool_call, dsml, "
+            + "tool_call); do not wrap the block in a code fence.";
 
     /** Built-in protocol header injected between client system and history. */
     public static final String SPECIAL_TOKENS_HEADER = """
@@ -247,6 +262,7 @@ Output discipline:
         if (!toolLines.isEmpty()) {
             sb.append('\n').append(SEC_TOOLS).append('\n');
             for (String line : toolLines) sb.append(line).append('\n');
+            sb.append('\n').append(TOOL_CALL_FORMAT).append('\n');
         }
 
         sb.append('\n').append(SEC_SYSTEM).append('\n');
