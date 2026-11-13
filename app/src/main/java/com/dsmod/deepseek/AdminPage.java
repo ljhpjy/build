@@ -342,6 +342,11 @@ async function copyLogs(){
   }catch(e){ document.getElementById('logmsg').textContent = '复制失败: ' + e; }
 }
 function exportLogs(){
+  // Optional: narrow the export to one request id (every line carries rid=).
+  var rid = prompt('导出单个请求的日志？输入 rid（留空 = 导出全部）', '');
+  if (rid === null) return;
+  rid = (rid || '').trim();
+  if (rid) { location.href = '/admin/api/logs/export?rid=' + encodeURIComponent(rid); return; }
   location.href = '/admin/api/logs/export' + (logCat ? ('?cat=' + encodeURIComponent(logCat)) : '');
 }
 async function clearLogs(){

@@ -308,6 +308,7 @@ public final class DeepSeekClient {
             String line;
             long lastProgress = 0L;
             int lastFragments = -1;
+            int frameCount = 0;
             while ((line = reader.readLine()) != null) {
                 long now = System.currentTimeMillis();
                 // Log on structural change or as a slow heartbeat: a 50s answer
@@ -327,7 +328,14 @@ public final class DeepSeekClient {
                 }
                 if (line.isEmpty()) {
                     if (data.length() > 0) {
-                        handleFrame(state, event, data.toString().trim());
+                        String frame = data.toString().trim();
+                        if (Config.debugFrames && frameCount < 8) {
+                            Logs.d(Logs.UPSTREAM, TAG, "frame[" + frameCount + "] "
+                                    + (frame.length() <= 240 ? frame
+                                    : frame.substring(0, 240) + "\u2026"));
+                        }
+                        frameCount++;
+                        handleFrame(state, event, frame);
                         emitDeltas(state, sink, sent);
                         event = null;
                         data.setLength(0);
@@ -615,16 +623,35 @@ public final class DeepSeekClient {
         String header = c.pow;
         long expireAt = c.powExpireAt;
         c.pow = null;
-        boolean usable = header != null && !header.isEmpty()
-                && (expireAt <= 0
-                || expireAt * 1000L - System.currentTimeMillis() > Config.powExpirySafetyMs);
-        if (usable) {
+        if (usable(header, expireAt)) {
             prefetchPow();
             return header;
+        }
+        // A prefetch is already in flight: wait for it instead of issuing a
+        // second create_pow_challenge round-trip. Observed cost of the duplicate
+        // call was ~3.9s, which dominated the whole request.
+        if (c.powBusy) {
+            for (int i = 0; i < 16 && c.powBusy; i++) {
+                try { Thread.sleep(50L); } catch (InterruptedException ignored) { }
+            }
+            header = c.pow;
+            expireAt = c.powExpireAt;
+            c.pow = null;
+            if (usable(header, expireAt)) {
+                Logs.d(Logs.UPSTREAM, TAG, "pow reused from prefetch after wait");
+                prefetchPow();
+                return header;
+            }
         }
         Solved solved = solve(PATH_COMPLETION);
         prefetchPow();
         return solved.header;
+    }
+
+    private static boolean usable(String header, long expireAtSec) {
+        if (header == null || header.isEmpty()) return false;
+        if (expireAtSec <= 0) return true;
+        return expireAtSec * 1000L - System.currentTimeMillis() > Config.powExpirySafetyMs;
     }
 
     private void prefetchPow() {

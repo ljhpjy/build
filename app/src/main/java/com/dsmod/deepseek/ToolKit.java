@@ -110,8 +110,16 @@ public final class ToolKit {
             int sp = 0;
             while (sp < t.length() && isTagChar(t.charAt(sp))) sp++;
             String name = t.substring(0, sp).toLowerCase();
+            String rest = t.substring(sp).trim();
+            // Lower-case variant: <dsml name="tool">{json}</dsml>. There is no
+            // sub-tag after the DSML prefix, the attributes start immediately.
+            if (name.isEmpty() || rest.startsWith("=")) {
+                name = "dsml";
+                sp = 0;
+            }
             if (!(name.equals("calls") || name.equals("tool_calls")
-                    || name.equals("invoke") || name.equals("parameter"))) {
+                    || name.equals("invoke") || name.equals("parameter")
+                    || name.equals("dsml"))) {
                 i = gt + 1;
                 continue;
             }
@@ -552,7 +560,9 @@ public final class ToolKit {
         int i = 0;
         while (i < tags.size()) {
             Tag t = tags.get(i);
-            if (t.close || !t.name.equals("invoke")) {
+            boolean isInvoke = t.name.equals("invoke");
+            boolean isDsml = t.name.equals("dsml");
+            if (t.close || (!isInvoke && !isDsml)) {
                 i++;
                 continue;
             }
@@ -560,7 +570,7 @@ public final class ToolKit {
             int next = i + 1;
             while (next < tags.size()) {
                 Tag n = tags.get(next);
-                if (n.name.equals("invoke")) {
+                if (n.name.equals(t.name)) {
                     bodyEnd = n.start;
                     break;
                 }
@@ -568,6 +578,27 @@ public final class ToolKit {
             }
             String name = t.attrs.get("name");
             name = name == null ? "" : name.trim();
+            if (isDsml) {
+                // <dsml name="tool">{json}</dsml> — the body is the raw arguments.
+                String dsmlBody = text.substring(t.end, bodyEnd).trim();
+                JSONObject dsmlArgs = new JSONObject();
+                if (dsmlBody.startsWith("{")) {
+                    try {
+                        dsmlArgs = new JSONObject(dsmlBody);
+                    } catch (Throwable ignore) { }
+                }
+                if (!name.isEmpty()) {
+                    Call call = new Call();
+                    call.name = name;
+                    call.arguments = dsmlArgs.toString();
+                    call.raw = text.substring(t.start, Math.min(bodyEnd, text.length()));
+                    call.index = t.start;
+                    call.format = "dsml";
+                    calls.add(call);
+                }
+                i = next;
+                continue;
+            }
             String body = text.substring(t.end, bodyEnd);
             JSONObject args = parseParams(body);
             if (args.length() == 0) {
@@ -781,7 +812,8 @@ public final class ToolKit {
                     }
                 }
                 ranges.add(new int[]{t.start, end});
-            } else if (t.name.equals("invoke") || t.name.equals("parameter")) {
+            } else if (t.name.equals("invoke") || t.name.equals("parameter")
+                    || t.name.equals("dsml")) {
                 if (covered(ranges, t.start)) continue;
                 int end = text.length();
                 for (int j = i + 1; j < tags.size(); j++) {
@@ -889,6 +921,8 @@ public final class ToolKit {
         /** Declared tool names; bare JSON is only dropped when the name matches. */
         private final java.util.Set<String> toolNames;
         private boolean droppingDsml = false;
+        /** JSON nesting inside a dropped DSML block; reaching 0 ends the drop. */
+        private int dsmlDepth = 0;
 
         public StreamFilter() {
             this(null);
@@ -905,6 +939,8 @@ public final class ToolKit {
         private int nativeDepth = 0;
         /** Inside a ``` fence: example content, pass through untouched. */
         private boolean inFence = false;
+        private int droppedLines = 0;
+        private int releasedChars = 0;
 
         public String push(String delta) {
             if (delta == null || delta.isEmpty()) return "";
@@ -916,6 +952,7 @@ public final class ToolKit {
                 pending.delete(0, idx + 1);
                 String safe = filterLine(line);
                 if (safe != null) out.append(safe);
+                else droppedLines++;
             }
             // No line break yet: release a safe prefix so single-line answers
             // still stream. Keep a short tail that may start a protocol tag.
@@ -952,6 +989,7 @@ public final class ToolKit {
                     pending.delete(0, lt);
                 }
             }
+            releasedChars += out.length();
             return out.toString();
         }
 
@@ -960,7 +998,22 @@ public final class ToolKit {
             String line = pending.toString();
             pending.setLength(0);
             String safe = filterLine(line);
-            return safe == null ? "" : safe;
+            if (safe == null) {
+                droppedLines++;
+                return "";
+            }
+            releasedChars += safe.length();
+            return safe;
+        }
+
+        /** Protocol lines swallowed by this filter (visible-text leak check). */
+        public int droppedLines() {
+            return droppedLines;
+        }
+
+        /** Characters actually forwarded to the client. */
+        public int releasedChars() {
+            return releasedChars;
         }
 
         private String filterLine(String line) {
@@ -1032,15 +1085,57 @@ public final class ToolKit {
                 }
             }
             if (droppingDsml) {
+                String lowerDsml = trimmed.toLowerCase();
                 if (trimmed.contains("</") && (trimmed.contains("DSML")
+                        || lowerDsml.contains("</dsml")
                         || trimmed.contains("invoke") || trimmed.contains("parameter"))) {
                     droppingDsml = false;
+                    dsmlDepth = 0;
+                    return null;
+                }
+                // End the drop as soon as the JSON body closes, even when the
+                // closing tag never arrives. Without this, an unclosed
+                // <dsml ...> in the thinking block swallowed every following
+                // line and left only the sentence before it.
+                int before = dsmlDepth;
+                for (int i = 0; i < trimmed.length(); i++) {
+                    char c = trimmed.charAt(i);
+                    if (c == '{' || c == '[') dsmlDepth++;
+                    else if (c == '}' || c == ']') dsmlDepth--;
+                }
+                if (dsmlDepth > 0) return null;   // still inside the JSON body
+                droppingDsml = false;
+                dsmlDepth = 0;
+                if (before > 0) return null;      // this line closed the body
+                // Nothing to drop here: fall through and treat it as ordinary
+                // text. Returning null used to swallow the first line after the
+                // header, which cut the tail off thinking sentences.
+            }
+            // Lower-case variant: <dsml name="tool">{json}</dsml>
+            if (lowerTrim.contains("<dsml")) {
+                if (!lowerTrim.contains("</dsml")) {
+                    // Count braces on this line too: a single-line
+                    // <dsml name="x">{...} without the closing tag must not put
+                    // the filter into drop mode for the following text.
+                    int depth = 0;
+                    for (int i = 0; i < trimmed.length(); i++) {
+                        char c = trimmed.charAt(i);
+                        if (c == '{' || c == '[') depth++;
+                        else if (c == '}' || c == ']') depth--;
+                    }
+                    if (depth > 0) {
+                        droppingDsml = true;
+                        dsmlDepth = depth;
+                    }
                 }
                 return null;
             }
             if (trimmed.startsWith("<") && (trimmed.contains("DSML") || trimmed.startsWith("<|tool"))) {
                 boolean complete = trimmed.contains("</") && trimmed.contains(">");
-                if (!complete) droppingDsml = true;
+                if (!complete) {
+                    droppingDsml = true;
+                    dsmlDepth = 0;
+                }
                 return null;
             }
             if (trimmed.startsWith("<")) {

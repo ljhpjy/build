@@ -464,18 +464,31 @@ public final class ChatRunner {
             String rest = reasoningFilter.flush();
             if (!rest.isEmpty()) sink.onReasoning(rest);
         }
+        // How much the stream filters swallowed vs forwarded. A reasoning
+        // "released" far below the raw length means the thinking block was
+        // over-filtered; content "released" above zero means protocol leaked.
+        if (contentFilter != null && reasoningFilter != null) {
+            Logs.d(Logs.CHAT, TAG, "filter content dropped_lines=" + contentFilter.droppedLines()
+                    + " released=" + contentFilter.releasedChars()
+                    + " | reasoning dropped_lines=" + reasoningFilter.droppedLines()
+                    + " released=" + reasoningFilter.releasedChars());
+        }
 
         result.reasoning = reply.reasoning == null ? "" : reply.reasoning;
         result.upstreamUsage = reply.usage;
 
         // Tool calls may live in the content stream, in the thinking block, or
         // split across both; search them independently so nothing is missed.
+        // Probe what syntax the reply actually contains: with tools=0 the next
+        // question is always "which marker was missing?"
+        Logs.d(Logs.CHAT, TAG, "parse probe " + probeOf(reply.content));
         List<ToolKit.Call> calls = ToolKit.parseCalls(reply.content, req.tools);
         String callSource = calls.isEmpty() ? "none" : "content";
         if (calls.isEmpty() && !result.reasoning.isEmpty()) {
             calls = ToolKit.parseCalls(result.reasoning, req.tools);
             if (!calls.isEmpty()) callSource = "reasoning";
         }
+        Logs.d(Logs.CHAT, TAG, "parse result calls=" + calls.size() + " src=" + callSource);
         List<ToolKit.Call> coerced = new ArrayList<>();
         for (ToolKit.Call call : calls) {
             ToolKit.Call fixed = new ToolKit.Call();
@@ -549,6 +562,13 @@ public final class ChatRunner {
         }
         // Two failure modes that used to be invisible: the model ignored the
         // documented call syntax, or it invented a tool result on its own.
+        // Content sampling: character counts alone cannot reveal a thinking
+        // block cut in half ("...ist with cursor.") or tool JSON leaking into
+        // the visible answer. Log the head and tail so those are obvious.
+        Logs.d(Logs.CHAT, TAG, "sample content=" + quoteHead(rawContent, 100)
+                + " reasoning_head=" + quoteHead(rawThinking, 100)
+                + " reasoning_tail=" + quoteTail(rawThinking, 100));
+
         Stats.TOOL_CALLS.addAndGet(result.toolCalls.size());
         if (downgraded > 0) {
             Stats.TOOL_DOWNGRADED.addAndGet(downgraded);
@@ -560,6 +580,42 @@ public final class ChatRunner {
             Logs.w(Logs.CHAT, TAG, "fabricated tool result detected; result text was stripped");
         }
         return result;
+    }
+
+    /** Marker counts in a reply, so a tools=0 outcome can be explained. */
+    private static String probeOf(String text) {
+        if (text == null || text.isEmpty()) return "empty";
+        return "dsml=" + countOf(text, "<dsml")
+                + " invoke=" + countOf(text, "invoke")
+                + " channel=" + countOf(text, "<|channel|>")
+                + " tooltoken=" + countOf(text, "<|tool")
+                + " toolcall=" + countOf(text, "<toolcall")
+                + " bare=" + countOf(text, "{\"name\"")
+                + " fenced=" + countOf(text, "```");
+    }
+
+    private static int countOf(String haystack, String needle) {
+        int n = 0;
+        int i = 0;
+        while ((i = haystack.indexOf(needle, i)) >= 0) {
+            n++;
+            i += needle.length();
+        }
+        return n;
+    }
+
+    /** First N chars of a collapsed single line, for debug logs. */
+    private static String quoteHead(String s, int n) {
+        if (s == null || s.isEmpty()) return "\"\"";
+        String t = s.replaceAll("\\s+", " ").trim();
+        return "\"" + (t.length() <= n ? t : t.substring(0, n) + "\u2026") + "\"";
+    }
+
+    /** Last N chars of a collapsed single line, for debug logs. */
+    private static String quoteTail(String s, int n) {
+        if (s == null || s.isEmpty()) return "\"\"";
+        String t = s.replaceAll("\\s+", " ").trim();
+        return "\"" + (t.length() <= n ? t : "\u2026" + t.substring(t.length() - n)) + "\"";
     }
 
     /** Single-line, length-capped preview for debug logs. */

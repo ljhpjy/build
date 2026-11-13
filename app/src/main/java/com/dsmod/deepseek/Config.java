@@ -56,6 +56,12 @@ public final class Config {
     /** 是否尝试宿主原生 PoW（部分版本会在 JNI 内卡死，默认关闭，纯 Java 求解）。 */
     public static boolean powNative = true;
 
+    /**
+     * Log the first few raw upstream SSE frames (truncated, sanitized).
+     * Off by default: frames carry the whole prompt echo and are large.
+     */
+    public static boolean debugFrames = false;
+
     /** 单次上游请求总超时。 */
     public static long requestTimeoutMs = 240_000L;
     /** 单账号限流冷却。 */

@@ -206,6 +206,29 @@ public final class Logs {
     }
 
     private static void appendFileContent(StringBuilder sb, File f, String filter, String label) {
+
+    /**
+     * Everything logged for one request id, so a single bad turn can be
+     * exported without the noise of the whole file.
+     */
+    public static String exportRid(String rid) {
+        StringBuilder sb = new StringBuilder();
+        if (rid == null || rid.isEmpty()) return sb.toString();
+        String needle = "rid=" + rid;
+        Context c = ctx;
+        if (c != null) {
+            appendFileContent(sb, new File(c.getFilesDir(), "dsmod_log.txt.1"), needle, "rotated " + rid);
+            appendFileContent(sb, new File(c.getFilesDir(), "dsmod_log.txt"), needle, "current " + rid);
+        }
+        if (sb.length() == 0) {
+            // The file may already have rolled over; fall back to the ring.
+            for (String line : tail(null, Integer.MAX_VALUE).split("\n", -1)) {
+                if (line.contains(needle)) sb.append(line).append('\n');
+            }
+            if (sb.length() > 0) sb.insert(0, "===== memory " + rid + " =====\n");
+        }
+        return sb.toString();
+    }
         try {
             if (f.isFile() && f.length() > 0) {
                 sb.append("===== ").append(label).append(" =====\n");

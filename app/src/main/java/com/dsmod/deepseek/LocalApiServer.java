@@ -350,6 +350,12 @@ public final class LocalApiServer {
                 String ts = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
                         java.util.Locale.US).format(new java.util.Date());
                 String cat = queryParam(query, "cat");
+                String rid = queryParam(query, "rid");
+                // rid= exports one turn only: every line already carries it.
+                if (!rid.isEmpty()) {
+                    writeDownload(out, "dsmod-log-" + rid + "-" + ts + ".txt", Logs.exportRid(rid));
+                    return;
+                }
                 String suffix = cat.isEmpty() ? "" : "-" + cat;
                 writeDownload(out, "dsmod-log" + suffix + "-" + ts + ".txt", Logs.export(cat));
                 return;
