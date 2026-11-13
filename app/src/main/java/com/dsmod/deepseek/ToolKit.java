@@ -25,6 +25,8 @@ import java.util.Map;
  * invocations are all tolerated.
  */
 public final class ToolKit {
+    private static final String TAG = "DSMOD";
+
     /** One parsed tool call. */
     public static final class Call {
         public String name = "";
