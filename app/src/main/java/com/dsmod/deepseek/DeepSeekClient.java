@@ -67,6 +67,10 @@ public final class DeepSeekClient {
         public String reasoning = "";
         public long usage = -1;
         public long firstTokenMs = -1;
+        /** Stage timings in ms; -1 when the stage was skipped. */
+        public long coldStartMs = -1;
+        public long sessionMs = -1;
+        public long powMs = -1;
     }
 
     private final String token;
@@ -100,7 +104,8 @@ public final class DeepSeekClient {
         if (id.isEmpty()) {
             throw new ApiException(502, "create session failed: " + msgOf(parse(text), text), "session_failed");
         }
-        Logs.i(Logs.UPSTREAM, TAG, "session created id=" + id);
+        Logs.i(Logs.UPSTREAM, TAG, "session created id="
+                + (id.length() > 6 ? id.substring(0, 6) + "\u2026" : id));
         return id;
     }
 
@@ -179,9 +184,15 @@ public final class DeepSeekClient {
         Reply reply = new Reply();
         long t0 = System.currentTimeMillis();
 
+        long tCold = System.currentTimeMillis();
         coldStartIfNeeded();
+        long coldMs = System.currentTimeMillis() - tCold;
+        long tSession = System.currentTimeMillis();
         String sessionId = takeSession();
+        long sessionMs = System.currentTimeMillis() - tSession;
+        long tPow = System.currentTimeMillis();
         String pow = takePow();
+        long powMs = System.currentTimeMillis() - tPow;
         if (Config.humanTiming) {
             try {
                 Thread.sleep(120L + (long) (Math.random() * 360.0));
@@ -209,7 +220,7 @@ public final class DeepSeekClient {
             throw new ApiException(400, "build completion body failed: " + t, "invalid_request");
         }
 
-        Logs.i(Logs.UPSTREAM, TAG, "completion req prompt_chars=" + prompt.length() + " thinking=" + thinking
+        Logs.i(Logs.UPSTREAM, TAG, "completion req model=" + modelType + " thinking=" + thinking
                 + " search=" + search + " files=" + (refFileIds == null ? 0 : refFileIds.size()));
         boolean powRetried = false;
         int apiRetries = 0;
@@ -260,6 +271,9 @@ public final class DeepSeekClient {
                 }
 
                 reply = readStream(conn, sink, t0);
+                reply.coldStartMs = coldMs;
+                reply.sessionMs = sessionMs;
+                reply.powMs = powMs;
                 if (reply.content.isEmpty() && reply.reasoning.isEmpty()) {
                     if (emptyRetries < 2) {
                         emptyRetries += 1;
@@ -572,15 +586,23 @@ public final class DeepSeekClient {
                     Cache c = cache();
                     if (c.sessionBusy || c.sessionId != null) return;
                     c.sessionBusy = true;
+                    long t0 = System.currentTimeMillis();
+                    boolean ok = false;
                     // Mark this thread's logs so background work cannot be
-                    // mistaken for a second call of the request in flight.
+                    // mistaken for a second call of the request in flight, and
+                    // collapse its multi-step chatter into one summary line.
                     Logs.setTrace("bg=prefetch");
+                    Logs.setQuiet(true);
                     try {
                         c.sessionId = createSession();
                         c.sessionAt = System.currentTimeMillis();
+                        ok = true;
                     } catch (Throwable ignore) {
                     } finally {
                         c.sessionBusy = false;
+                        Logs.setQuiet(false);
+                        Logs.d(Logs.UPSTREAM, TAG, (ok ? "session ready ms=" : "session failed ms=")
+                                + (System.currentTimeMillis() - t0));
                         Logs.clearTrace();
                     }
                 }
@@ -613,14 +635,21 @@ public final class DeepSeekClient {
                     Cache c = cache();
                     if (c.powBusy || c.pow != null) return;
                     c.powBusy = true;
+                    long t0 = System.currentTimeMillis();
+                    boolean ok = false;
                     Logs.setTrace("bg=prefetch");
+                    Logs.setQuiet(true);
                     try {
                         Solved solved = solve(PATH_COMPLETION);
                         c.pow = solved.header;
                         c.powExpireAt = solved.expireAt;
+                        ok = true;
                     } catch (Throwable ignore) {
                     } finally {
                         c.powBusy = false;
+                        Logs.setQuiet(false);
+                        Logs.d(Logs.UPSTREAM, TAG, (ok ? "pow ready ms=" : "pow failed ms=")
+                                + (System.currentTimeMillis() - t0));
                         Logs.clearTrace();
                     }
                 }

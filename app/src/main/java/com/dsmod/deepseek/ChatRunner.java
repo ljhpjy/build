@@ -374,6 +374,19 @@ public final class ChatRunner {
             throw new DeepSeekClient.ApiException(400, "empty prompt", "invalid_messages");
         }
         Overflow.Plan overflow = null;
+        // Before pushing history into an attachment, try the compact tool index:
+        // declarations are the largest fixed cost, and once they move into an
+        // attachment the model can no longer see them at all (it then invents
+        // call syntax instead of calling a real tool).
+        if (prompt.length() > Config.maxPromptChars
+                && req.tools != null && req.tools.length() > 0) {
+            Prompt.Built compactBuilt = Prompt.build(req.messages, req.tools, true);
+            if (compactBuilt.prompt.length() < prompt.length()) {
+                Logs.i(Logs.CHAT, TAG, "prompt over limit, retry compact tool decls chars="
+                        + compactBuilt.prompt.length() + " was=" + prompt.length());
+                prompt = compactBuilt.prompt;
+            }
+        }
         if (prompt.length() > Config.maxPromptChars) {
             if (!Config.overflowToAttachment) {
                 throw new DeepSeekClient.ApiException(413,
@@ -506,17 +519,31 @@ public final class ChatRunner {
             ToolKit.Call c = result.toolCalls.get(i);
             names.append(c.name).append('(').append(c.arguments.length()).append("B)");
         }
-        Logs.i(Logs.CHAT, TAG, "extract content=" + result.content.length()
+        result.elapsedMs = System.currentTimeMillis() - start;
+        // One closing line per request: what came back, where it came from, and
+        // how the time was spent. "extract" + "chat done" used to say the same
+        // thing twice and neither carried the stage breakdown.
+        Logs.i(Logs.CHAT, TAG, "chat done content=" + result.content.length()
                 + " reasoning=" + result.reasoning.length()
                 + " tools=" + result.toolCalls.size()
                 + (names.length() > 0 ? " [" + names + "]" : "")
                 + " src=" + callSource
-                + " fabricated=" + result.fabricated);
-        result.elapsedMs = System.currentTimeMillis() - start;
-        Logs.i(Logs.CHAT, TAG, "chat done content_chars=" + result.content.length()
-                + " reasoning_chars=" + result.reasoning.length()
-                + " tool_calls=" + result.toolCalls.size() + " elapsed_ms=" + result.elapsedMs);
+                + " fabricated=" + result.fabricated
+                + " elapsed=" + result.elapsedMs + "ms"
+                + " cold=" + reply.coldStartMs + " session=" + reply.sessionMs
+                + " pow=" + reply.powMs);
+        for (int i = 0; i < result.toolCalls.size(); i++) {
+            ToolKit.Call c = result.toolCalls.get(i);
+            Logs.d(Logs.CHAT, TAG, "tool args " + c.name + ": " + preview(c.arguments, 120));
+        }
         return result;
+    }
+
+    /** Single-line, length-capped preview for debug logs. */
+    private static String preview(String s, int max) {
+        if (s == null || s.isEmpty()) return "{}";
+        String t = s.replaceAll("\\s+", " ").trim();
+        return t.length() <= max ? t : t.substring(0, max) + "\u2026";
     }
 
     private static byte[] loadImage(String url) throws Exception {

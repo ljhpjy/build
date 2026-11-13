@@ -395,23 +395,27 @@ public final class ToolKit {
     private static List<Call> parseJsonToolCalls(String text) {
         List<Call> calls = new ArrayList<>();
         if (text == null || text.isEmpty()) return calls;
-        String lower = text.toLowerCase();
+        // <toolcall> and <tool_call> are both in use; normalise for matching
+        // only, the returned raw slice still comes from the original text.
+        String work = text.replaceAll("(?i)<\\s*toolcall\\s*>", "<tool_call>")
+                .replaceAll("(?i)<\\s*/\\s*toolcall\\s*>", "</tool_call>");
+        String lower = work.toLowerCase();
         int from = 0;
         while (true) {
             int open = lower.indexOf("<tool_call", from);
             if (open < 0) break;
-            int bodyStart = text.indexOf('>', open);
+            int bodyStart = work.indexOf('>', open);
             if (bodyStart < 0) break;
             int close = lower.indexOf("</tool_call", bodyStart);
             if (close < 0) break;
-            String body = text.substring(bodyStart + 1, close).trim();
+            String body = work.substring(bodyStart + 1, close).trim();
             from = close + 1;
             Call call = callFromJson(body);
             if (call != null) calls.add(call);
         }
         if (calls.isEmpty()) {
             // Bare JSON object with a name field and no wrapper tags.
-            String trimmed = text.trim();
+            String trimmed = work.trim();
             if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
                 Call call = callFromJson(trimmed);
                 if (call != null) calls.add(call);
@@ -523,8 +527,36 @@ public final class ToolKit {
         String s = removeNativeChannelBlocks(text);
         s = removeNativeToolTokenBlocks(s);
         s = removeDsmlBlocks(s);
+        s = removeToolCallBlocks(s);
         s = removeEndTokens(s);
         return s;
+    }
+
+    /**
+     * &lt;toolcall&gt;...&lt;/toolcall&gt; / &lt;tool_call&gt;...&lt;/tool_call&gt;, including
+     * the unclosed form that runs to the end of the text.
+     */
+    private static String removeToolCallBlocks(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String s = text.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*?<\\s*/\\s*tool_?call\\s*>", "");
+        s = s.replaceAll("(?is)<\\s*tool_?call\\s*>[\\s\\S]*$", "");
+        return s;
+    }
+
+    /**
+     * Whole lines that are a bare {"name":..,"arguments":..} tool call.
+     * The App build sometimes prints the call as plain JSON instead of using a
+     * wrapper tag, and that text must never reach the client as content.
+     */
+    private static String removeBareCallLines(String text) {
+        if (text == null || text.isEmpty()) return text;
+        StringBuilder out = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            String t = line.trim();
+            if (t.startsWith("{") && t.endsWith("}") && callFromJson(t) != null) continue;
+            out.append(line).append('\n');
+        }
+        return out.toString();
     }
 
     public static String stripMarkup(String text) {
@@ -532,6 +564,8 @@ public final class ToolKit {
         String s = removeNativeChannelBlocks(text);
         s = removeNativeToolTokenBlocks(s);
         s = removeDsmlBlocks(s);
+        s = removeToolCallBlocks(s);
+        s = removeBareCallLines(s);
         s = removeEndTokens(s);
         s = removeProtocolLines(s);
         s = s.replaceAll("```[a-zA-Z0-9_+-]*[ \\t]*\\r?\\n[ \\t]*\\r?\\n?[ \\t]*```(\\r?\\n)?", "");
@@ -664,6 +698,8 @@ public final class ToolKit {
         private boolean droppingDsml = false;
         /** Skipping the JSON line that follows a native <|channel|> tool header. */
         private boolean droppingNative = false;
+        /** Inside a <toolcall> / <tool_call> block. */
+        private boolean droppingToolCall = false;
 
         public String push(String delta) {
             if (delta == null || delta.isEmpty()) return "";
@@ -723,6 +759,21 @@ public final class ToolKit {
                 // <|tool▁calls▁begin|> style token: its JSON body follows on the
                 // next line, so keep dropping until that line is consumed.
                 if (trimmed.toLowerCase().contains("tool")) droppingNative = true;
+                return null;
+            }
+            // <toolcall> / <tool_call> wrapper: drop the whole block.
+            String lowerTrim = trimmed.toLowerCase();
+            if (lowerTrim.startsWith("<toolcall") || lowerTrim.startsWith("<tool_call")) {
+                if (!trimmed.contains("</")) droppingToolCall = true;
+                return null;
+            }
+            if (droppingToolCall) {
+                if (trimmed.contains("</")) droppingToolCall = false;
+                return null;
+            }
+            // A whole line that is a bare tool-call JSON object.
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")
+                    && callFromJson(trimmed) != null) {
                 return null;
             }
             if (droppingDsml) {

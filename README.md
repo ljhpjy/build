@@ -94,6 +94,29 @@ gradle :app:assembleRelease
 
 ---
 
+## 版本号（单一来源）
+
+`version.properties` 是唯一真相，构建时自动注入到三处，不会再出现「改了版本号不生效」：
+
+```properties
+VERSION_NAME=1.1.2
+VERSION_CODE=10102   # 可省略，自动由 VERSION_NAME 推导（1.1.2 -> 10102）
+```
+
+| 位置 | 来源 |
+|---|---|
+| `AndroidManifest.xml` 的 versionName / versionCode | Gradle 从 `version.properties` 注入（manifest 里**不再硬编码**） |
+| APK 文件名 | workflow 读取后重命名为 `DeepSeek-本地API_<VERSION_NAME>.apk` |
+| `/healthz` 的 `version` 字段、设置页显示 | `BuildConfig.VERSION_NAME`（编译期注入） |
+
+**自动递增**：workflow 最后一步在「构建 + 重命名 + 上传」全部成功后，把 patch 号 +1 并提交回分支（commit message 带 `[skip ci]`）。
+构建失败时该步骤不会执行，所以版本号不会前进。
+
+- 只在 `push` 到 `main` / `master` 或 `workflow_dispatch` 时递增
+- PR 构建、tag 构建不递增（tag 的版本由 tag 决定）
+- 用 `GITHUB_TOKEN` 推送不会触发新的 workflow run，不会死循环
+- 需要仓库 Settings → Actions → Workflow permissions 允许 **Read and write**（workflow 已声明 `permissions: contents: write`）
+
 ## 使用
 
 1. 安装模块 APK；
@@ -179,34 +202,46 @@ curl -N http://127.0.0.1:8765/v1/messages \
 
 ### 一次聊天请求的完整日志（示例）
 
-日志采用 logcat 风格：`时间 级别/分类[模块]: rid=请求ID 事件 键=值`。每条都带同一个 `rid=`，搜索 `rid=` 即可串联一次请求：
+日志采用 logcat 风格：`时间 级别/分类[模块]: rid=请求ID 事件 键=值`。
+每条都带同一个 `rid=`，搜索 `rid=` 即可串联一次请求；后台预取线程带 `bg=prefetch`，不属于任何请求。
 
 ```
-10:01:02 I/HTTP[DSMOD]: rid=req_1a2b recv POST /v1/chat/completions
-10:01:02 I/ACCOUNT[DSMOD]: rid=req_1a2b account pick #1/1 token=Dbr3****OAIv
-10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b coldstart ok
-10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b session created id=<session-id>
-10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b challenge ok difficulty=144000 expire_at=1763000000000
-10:01:03 D/UPSTREAM[DSMOD]: rid=req_1a2b pow native start challenge_len=64 challenge_head=3f9a2b1c salt_len=16 expire_at=1763000000000 difficulty=144000
-10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b pow verify ok
-10:01:03 I/UPSTREAM[DSMOD]: rid=req_1a2b pow native ok answer=12345 elapsed_ms=28
-10:01:04 I/CHAT[DSMOD]: rid=req_1a2b prompt built chars=420 messages=3 tools=0 overflow=false
-10:01:04 I/UPSTREAM[DSMOD]: rid=req_1a2b completion req prompt_chars=420 thinking=true search=false files=0
-10:01:04 I/UPSTREAM[DSMOD]: rid=req_1a2b completion tx waiting_rx
-10:01:05 I/UPSTREAM[DSMOD]: rid=req_1a2b completion rx http=200 content_type=text/event-stream
-10:01:05 I/UPSTREAM[DSMOD]: rid=req_1a2b stream progress fragments=3
-10:01:07 I/UPSTREAM[DSMOD]: rid=req_1a2b completion done content_chars=1800 reasoning_chars=400 ttft_ms=1200 total_ms=3200
-10:01:07 I/CHAT[DSMOD]: rid=req_1a2b chat done content_chars=1800 reasoning_chars=400 tool_calls=0 elapsed_ms=3300
-10:01:07 I/HTTP[DSMOD]: rid=req_1a2b done POST /v1/chat/completions elapsed_ms=3400
+08:12:05.100 I/HTTP[DSMOD]     rid=req_abc: recv POST /v1/chat/completions
+08:12:05.120 I/ACCOUNT[DSMOD]  rid=req_abc: account pick #2/3 token=pxEK****dYL8 skip=[#1:authFailed #3:cooldown42s]
+08:12:05.180 D/CONFIG[DSMOD]   rid=req_abc: tool decls compacted lines=70 full_chars=98000 compact_at=1350000
+08:12:05.185 I/CHAT[DSMOD]     rid=req_abc: prompt built chars=21221 messages=20 tools=70 overflow=false
+08:12:05.400 I/UPSTREAM[DSMOD] rid=req_abc: completion req model=default thinking=true search=false files=0
+08:12:05.410 I/UPSTREAM[DSMOD] rid=req_abc: completion tx attempt=1 retries=0
+08:12:06.200 I/UPSTREAM[DSMOD] rid=req_abc: completion rx http=200 content_type=text/event-stream; charset=utf-8
+08:12:09.300 D/UPSTREAM[DSMOD] rid=req_abc: stream fragments=1 content=0 reasoning=931
+08:12:12.400 D/UPSTREAM[DSMOD] rid=req_abc: stream fragments=3 content=214 reasoning=2366
+08:12:13.600 I/UPSTREAM[DSMOD] rid=req_abc: completion done content=73 reasoning=2366 ttft_ms=5841 total_ms=10154
+08:12:13.650 D/CHAT[DSMOD]     rid=req_abc: strip content=73->0 reasoning=2366->2296 removed=143 tool_source=content
+08:12:13.660 I/CHAT[DSMOD]     rid=req_abc: chat done content=0 reasoning=2296 tools=2 [get_time_info(2B),eval_javascript(48B)] src=reasoning fabricated=false elapsed=10255ms cold=0 session=583 pow=190
+08:12:13.670 D/CHAT[DSMOD]     rid=req_abc: tool args eval_javascript: {"code":"const a=[1,2,3]…"}
+08:12:13.680 I/HTTP[DSMOD]     rid=req_abc: done POST /v1/chat/completions elapsed_ms=10314
 ```
+
+**读法**：
+
+| 字段 | 含义 |
+|---|---|
+| `rid=req_xxx` | 同一请求的所有日志都带它；`bg=prefetch` 是后台预取，不属于任何请求 |
+| `skip=[...]` | 为什么跳过了其他账号：`authFailed` 已失效 / `cooldown42s` 冷却中 |
+| `attempt=1 retries=0` | 上游尝试次数；重试会额外出现 `completion retry reason=...` |
+| `stream fragments=3 content=214 reasoning=2366` | 片段数 + 已收正文/思考字符数（只在结构变化或 15s 心跳时打） |
+| `strip ... removed=143 tool_source=content` | 清洗掉多少字符、工具调用从哪个流提取 |
+| `chat done ... cold/session/pow` | 收尾一行：内容量 + 工具名 + 各阶段耗时（毫秒） |
+| `tool args ...` | D 级：工具参数脱敏预览，排查参数错误用 |
 
 **排障定位**（看最后一条停在哪里）：
 
 | 最后一条 | 结论 |
 |---|---|
 | `recv …` | 请求已进入，但业务未开始（并发排队 / 无线程） |
-| `completion tx waiting_rx` | 已发出，上游不响应（网络 / 风控），120s 后报 `completion error` |
-| `stream progress` 中断 | 上游断流，报 `stream_failed` |
+| `completion tx attempt=…` | 已发出，上游不响应（网络 / 风控），120s 后报 `completion error` |
+| `stream fragments` 中断 | 上游断流，报 `stream_failed` |
+| `completion retry reason=…` | 触发重试：`pow` / `upstream_5xx` / `empty_stream` |
 | `completion rx http=429` | 上游限流（`rate_limited`） |
 | `completion rx http=401` | 登录失效（`auth_expired`） |
 | `pow native timeout` / `pow java exhausted` | PoW 失败（参数 / 算法异常） |

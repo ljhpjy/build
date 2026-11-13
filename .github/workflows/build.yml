@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed by the final "bump version" step to push back to the branch.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,6 +41,20 @@ jobs:
             -dname "CN=DSMod, OU=DeepSeek, O=DSMod, L=Local, S=Local, C=CN"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/dsmod.keystore" >> "$GITHUB_ENV"
 
+      - name: Read module version
+        id: ver
+        run: |
+          set -e
+          VERSION_NAME=$(sed -n 's/^VERSION_NAME=//p' version.properties | tr -d '\r' | head -n1)
+          VERSION_CODE=$(sed -n 's/^VERSION_CODE=//p' version.properties | tr -d '\r' | head -n1)
+          if [ -z "$VERSION_NAME" ]; then
+            echo "version.properties is missing VERSION_NAME" >&2
+            exit 1
+          fi
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Module version: $VERSION_NAME ($VERSION_CODE)"
+
       - name: Build release APK
         env:
           KEYSTORE_PASSWORD: dsmod123456
@@ -44,10 +62,67 @@ jobs:
           KEY_PASSWORD: dsmod123456
         run: gradle :app:assembleRelease --no-daemon --stacktrace
 
+      # Gradle always names the output app-release.apk, so the version has to be
+      # applied here. Fails loudly when the APK is missing or unsigned.
+      - name: Rename APK with version
+        run: |
+          set -e
+          mkdir -p dist
+          found=0
+          for f in app/build/outputs/apk/release/*.apk; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in
+              *-unsigned.apk) continue ;;
+            esac
+            cp "$f" "dist/DeepSeek-本地API_${{ steps.ver.outputs.name }}.apk"
+            found=1
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No signed release APK produced" >&2
+            ls -l app/build/outputs/apk/release || true
+            exit 1
+          fi
+          ls -l dist
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dsmod-deepseek-apk
-          path: |
-            app/build/outputs/apk/release/*.apk
+          name: dsmod-deepseek-apk-${{ steps.ver.outputs.name }}
+          path: dist/*.apk
           if-no-files-found: error
+
+      # Last step on purpose: build, rename and upload must all succeed first,
+      # so a failed build never advances the version. A push made with
+      # GITHUB_TOKEN does not trigger another workflow run, so no loop.
+      - name: Bump version after successful build
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+        continue-on-error: true
+        run: |
+          set -e
+          NAME=$(sed -n 's/^VERSION_NAME=//p' version.properties | tr -d '\r' | head -n1)
+          if [ -z "$NAME" ]; then
+            echo "version.properties has no VERSION_NAME, nothing to bump" >&2
+            exit 0
+          fi
+          MAJOR=$(echo "$NAME" | cut -d. -f1)
+          MINOR=$(echo "$NAME" | cut -d. -f2)
+          PATCH=$(echo "$NAME" | cut -d. -f3)
+          MAJOR=${MAJOR:-1}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+          PATCH=$((PATCH + 1))
+          NEW_NAME="$MAJOR.$MINOR.$PATCH"
+          NEW_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          printf '%s\n' \
+            "# Single source of truth for the module version." \
+            "# VERSION_NAME drives manifest versionName, APK file name and /healthz." \
+            "# VERSION_CODE is derived from VERSION_NAME when omitted (1.1.2 -> 10102)." \
+            "# Bumped automatically by CI only after a successful build." \
+            "VERSION_NAME=$NEW_NAME" \
+            "VERSION_CODE=$NEW_CODE" > version.properties
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.properties
+          git commit -m "chore(release): bump to $NEW_NAME [skip ci]"
+          git push
+          echo "Next build will produce DeepSeek-本地API_$NEW_NAME.apk"

@@ -34,7 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class LocalApiServer {
     private static final String TAG = "DSMOD";
-    private static final String VERSION = "1.0.0";
+    /** Same value as versionName in version.properties, injected at build time. */
+    private static final String VERSION = BuildConfig.VERSION_NAME;
 
     private static final AtomicBoolean STARTED = new AtomicBoolean(false);
     private static volatile ServerSocket server;

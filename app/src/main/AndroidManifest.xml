@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+<!-- versionCode / versionName live in version.properties -> app/build.gradle.
+     Do not hardcode them here: a value in the manifest overrides Gradle's
+     defaultConfig, which is why bumping the version used to do nothing. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

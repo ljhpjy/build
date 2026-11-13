@@ -117,6 +117,17 @@ Output discipline:
 
     /** Build the prompt from OpenAI messages + tools. */
     public static Built build(JSONArray messages, JSONArray tools) {
+        return build(messages, tools, false);
+    }
+
+    /**
+     * @param forceCompact render tool declarations in the compact one-line form
+     *                     regardless of size. Used when the full form would push
+     *                     the prompt over the input limit: compacting first is
+     *                     always better than moving the declarations into an
+     *                     attachment the model cannot read.
+     */
+    public static Built build(JSONArray messages, JSONArray tools, boolean forceCompact) {
         Built built = new Built();
         built.toolNames = collectToolNames(tools);
 
@@ -222,7 +233,7 @@ Output discipline:
         // fits, and compacting it throws away parameter descriptions the model
         // needs in order to pick the right tool.
         int compactAt = (int) Math.max(200_000L, Config.maxPromptChars - 300_000L);
-        if (toolChars > compactAt) {
+        if (forceCompact || toolChars > compactAt) {
             List<String> compact = renderCompactToolDeclarations(tools);
             if (!compact.isEmpty()) {
                 toolLines = compact;

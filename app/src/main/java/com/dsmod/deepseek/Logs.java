@@ -74,6 +74,21 @@ public final class Logs {
     /** 当前线程的请求 ID；所有日志自动附带，方便按一次请求串联。 */
     private static final ThreadLocal<String> TRACE = new ThreadLocal<>();
 
+    /**
+     * Suppress I/D output on the current thread (W/E still pass). Background
+     * prefetch work uses this so its multi-step chatter collapses into one
+     * summary line instead of polluting the request view.
+     */
+    private static final ThreadLocal<Boolean> QUIET = new ThreadLocal<>();
+
+    public static void setQuiet(boolean quiet) {
+        if (quiet) QUIET.set(Boolean.TRUE); else QUIET.remove();
+    }
+
+    private static boolean isQuiet() {
+        return Boolean.TRUE.equals(QUIET.get());
+    }
+
     public static void setTrace(String trace) {
         if (trace == null) TRACE.remove(); else TRACE.set(trace);
     }
@@ -84,6 +99,7 @@ public final class Logs {
     public static void d(String cat, String tag, String msg) { write("D", cat, tag, msg, null); }
 
     private static void write(String level, String cat, String tag, String msg, Throwable t) {
+        if (isQuiet() && !"W".equals(level) && !"E".equals(level)) return;
         String time;
         synchronized (LOCK) {
             time = TIME.format(new Date());
