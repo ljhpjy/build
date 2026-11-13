@@ -51,6 +51,25 @@ public final class ToolKit {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
     }
 
+    /** Upper bound for a single DSML open tag; only guards against stray '<'. */
+    private static final int MAX_TAG_LEN = 8192;
+
+    /** Drop a trailing </...parameter> or </...invoke> left before the next tag. */
+    private static String stripTrailingCloseTag(String value) {
+        if (value == null || value.isEmpty()) return value;
+        String s = value;
+        int end = s.length();
+        while (end > 0 && Character.isWhitespace(s.charAt(end - 1))) end--;
+        int close = s.lastIndexOf("</", end - 1);
+        if (close >= 0) {
+            String tail = s.substring(close, end).replace("\uFF5C", "|").toLowerCase();
+            if (tail.endsWith(">") && (tail.contains("parameter") || tail.contains("invoke"))) {
+                s = s.substring(0, close);
+            }
+        }
+        return s;
+    }
+
     private static List<Tag> scanTags(String text) {
         List<Tag> tags = new ArrayList<>();
         int i = 0;
@@ -58,7 +77,10 @@ public final class ToolKit {
             int lt = text.indexOf('<', i);
             if (lt < 0) break;
             int gt = text.indexOf('>', lt);
-            if (gt < 0 || gt - lt > 256) {
+            // fuckds uses [^>]* with no length cap: a long attribute list must
+            // not make the tag unparseable. Only bail out when there is no '>'
+            // within a sane window (a bare '<' in prose).
+            if (gt < 0 || gt - lt > MAX_TAG_LEN) {
                 i = lt + 1;
                 continue;
             }
@@ -151,7 +173,13 @@ public final class ToolKit {
             if (name == null) continue;
             name = name.trim();
             if (name.isEmpty()) continue;
-            String raw = body.substring(t.end, end);
+            // Trim trailing closing tags / whitespace before the next opening
+            // tag, otherwise </parameter> leaks into the value (fuckds matches
+            // non-greedily up to the first </...parameter> instead).
+            int valueStart = t.end;
+            int valueEnd = end;
+            String raw = body.substring(valueStart, valueEnd);
+            raw = stripTrailingCloseTag(raw);
             String stringAttr = t.attrs.get("string");
             boolean asString = true;
             if (stringAttr != null) {
@@ -183,6 +211,64 @@ public final class ToolKit {
     /* ------------------------------------------------------------------ */
 
     public static List<Call> parseCalls(String text) {
+        List<Call> calls = parseDsmlCalls(text);
+        if (calls.isEmpty()) calls = parseJsonToolCalls(text);
+        return calls;
+    }
+
+    /**
+     * Silent fallback for the older <tool_call>{...}</tool_call> shape, which
+     * some model revisions still emit instead of DSML. Same intent as fuckds:
+     * a missing parse here turns a valid tool call into an empty reply.
+     */
+    private static List<Call> parseJsonToolCalls(String text) {
+        List<Call> calls = new ArrayList<>();
+        if (text == null || text.isEmpty()) return calls;
+        String lower = text.toLowerCase();
+        int from = 0;
+        while (true) {
+            int open = lower.indexOf("<tool_call", from);
+            if (open < 0) break;
+            int bodyStart = text.indexOf('>', open);
+            if (bodyStart < 0) break;
+            int close = lower.indexOf("</tool_call", bodyStart);
+            if (close < 0) break;
+            String body = text.substring(bodyStart + 1, close).trim();
+            from = close + 1;
+            Call call = callFromJson(body);
+            if (call != null) calls.add(call);
+        }
+        if (calls.isEmpty()) {
+            // Bare JSON object with a name field and no wrapper tags.
+            String trimmed = text.trim();
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                Call call = callFromJson(trimmed);
+                if (call != null) calls.add(call);
+            }
+        }
+        return calls;
+    }
+
+    private static Call callFromJson(String body) {
+        if (body == null || body.isEmpty()) return null;
+        try {
+            JSONObject obj = new JSONObject(body);
+            String name = obj.optString("name", "").trim();
+            if (name.isEmpty()) return null;
+            JSONObject args = obj.optJSONObject("arguments");
+            if (args == null) args = obj.optJSONObject("args");
+            if (args == null) args = obj.optJSONObject("parameters");
+            Call call = new Call();
+            call.name = name;
+            call.arguments = args == null ? "{}" : args.toString();
+            call.raw = body;
+            return call;
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+    private static List<Call> parseDsmlCalls(String text) {
         List<Call> calls = new ArrayList<>();
         if (text == null || text.isEmpty()) return calls;
         List<Tag> tags = scanTags(text);
@@ -224,6 +310,30 @@ public final class ToolKit {
                 calls.add(call);
             }
             i = next;
+        }
+
+        // Truncated output / missing closing tag: same fallback as fuckds.
+        // Accept an <invoke ...> whose parameters are complete even when the
+        // enclosing </invoke> or </calls> never arrived.
+        if (calls.isEmpty()) {
+            for (int k = 0; k < tags.size(); k++) {
+                Tag t = tags.get(k);
+                if (t.close || !t.name.equals("invoke")) continue;
+                String name = t.attrs.get("name");
+                name = name == null ? "" : name.trim();
+                if (name.isEmpty()) continue;
+                String body = text.substring(t.end);
+                JSONObject args = parseParams(body);
+                if (args.length() == 0) continue;
+                Call call = new Call();
+                call.name = name;
+                call.arguments = args.toString();
+                call.raw = text.substring(t.start);
+                call.index = t.start;
+                calls.add(call);
+                Logs.d(Logs.CHAT, TAG, "tool call recovered from truncated output: " + name);
+                break;
+            }
         }
         return calls;
     }
@@ -378,14 +488,20 @@ public final class ToolKit {
                 if (safe != null) out.append(safe);
             }
             // No line break yet: release a safe prefix so single-line answers
-            // still stream. Keep a short tail that may start a protocol tag;
-            // a large pending buffer (pathological single line) is released too.
-            if (!droppingDsml && pending.length() > 64) {
-                boolean safe = pending.indexOf("<") < 0 || pending.length() > 4096;
-                if (safe) {
-                    int cut = pending.length() - 16;
-                    out.append(pending, 0, cut);
-                    pending.delete(0, cut);
+            // still stream. Keep a short tail that may start a protocol tag.
+            // Text before the first '<' is always safe, even on one long line,
+            // otherwise a whole single-line answer would be held back.
+            if (!droppingDsml && pending.length() > 24) {
+                int lt = pending.indexOf("<");
+                if (lt < 0) {
+                    if (pending.length() > 64) {
+                        int cut = pending.length() - 16;
+                        out.append(pending, 0, cut);
+                        pending.delete(0, cut);
+                    }
+                } else if (lt > 0) {
+                    out.append(pending, 0, lt);
+                    pending.delete(0, lt);
                 }
             }
             return out.toString();
@@ -458,11 +574,53 @@ public final class ToolKit {
         JSONArray keys = args.names();
         if (keys != null && keys.length() == 1) {
             String only = keys.optString(0);
-            JSONObject inner = args.optJSONObject(only);
-            if (inner != null && ("args".equals(only) || "arguments".equals(only) || "parameters".equals(only))
-                    && hasAnyProp(inner, props)) {
-                args = inner;
+            if ("args".equals(only) || "arguments".equals(only) || "parameters".equals(only)) {
+                Object raw = args.opt(only);
+                JSONObject inner = args.optJSONObject(only);
+                // Same as fuckds: the wrapper may carry a JSON string, not an object.
+                if (inner == null && raw instanceof String) {
+                    try {
+                        inner = new JSONObject(((String) raw).trim());
+                    } catch (Throwable ignore) { }
+                }
+                if (inner != null && hasAnyProp(inner, props)) args = inner;
             }
+        }
+
+        // Case-insensitive rename: only when the declared name is missing and
+        // exactly one insensitive match exists (same rule as fuckds).
+        List<String> propNames = new ArrayList<>();
+        JSONArray propKeys = props.names();
+        if (propKeys != null) {
+            for (int i = 0; i < propKeys.length(); i++) propNames.add(propKeys.optString(i));
+        }
+        List<String> renames = new ArrayList<>();
+        JSONArray renameKeys = args.names();
+        if (renameKeys != null) {
+            for (int i = 0; i < renameKeys.length(); i++) {
+                String key = renameKeys.optString(i);
+                if (props.has(key)) continue;
+                String match = null;
+                int hits = 0;
+                for (String candidate : propNames) {
+                    if (candidate.equalsIgnoreCase(key)) {
+                        match = candidate;
+                        hits++;
+                    }
+                }
+                if (match != null && hits == 1) renames.add(key + "\u0000" + match);
+            }
+        }
+        for (String pair : renames) {
+            int sep = pair.indexOf('\u0000');
+            String from = pair.substring(0, sep);
+            String to = pair.substring(sep + 1);
+            try {
+                Object moved = args.opt(from);
+                args.remove(from);
+                args.put(to, moved);
+                Logs.d(Logs.CHAT, TAG, "coerce rename " + from + " -> " + to);
+            } catch (Throwable ignore) { }
         }
 
         JSONArray outKeys = args.names();

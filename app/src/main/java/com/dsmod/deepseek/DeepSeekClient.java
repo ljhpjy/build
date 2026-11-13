@@ -277,7 +277,15 @@ public final class DeepSeekClient {
                 long now = System.currentTimeMillis();
                 if (now - lastProgress >= 3000L) {
                     lastProgress = now;
-                    Logs.i(Logs.UPSTREAM, TAG, "stream progress fragments=" + state.fragments.size());
+                    int contentChars = 0;
+                    int thinkChars = 0;
+                    for (int i = 0; i < state.fragments.size(); i++) {
+                        Fragment f = state.fragments.get(i);
+                        if ("THINK".equals(f.type)) thinkChars += f.content.length();
+                        else contentChars += f.content.length();
+                    }
+                    Logs.i(Logs.UPSTREAM, TAG, "stream progress fragments=" + state.fragments.size()
+                            + " content_chars=" + contentChars + " reasoning_chars=" + thinkChars);
                 }
                 if (line.isEmpty()) {
                     if (data.length() > 0) {
@@ -345,6 +353,8 @@ public final class DeepSeekClient {
         String status = "";
         long usage = -1;
         long firstTokenAt = 0;
+        /** Text appended before any fragment existed; recovered as RESPONSE. */
+        String orphan = "";
     }
 
     private static void parseFragments(JSONArray arr, List<Fragment> out) {
@@ -418,7 +428,14 @@ public final class DeepSeekClient {
 
     private static void appendLast(State state, String text) {
         if (text == null || text.isEmpty()) return;
-        if (state.fragments.isEmpty()) state.fragments.add(new Fragment());
+        // Same as fuckds appendToLast: without an existing fragment there is
+        // nowhere to append. Creating one here would produce a fragment with an
+        // empty type, which collect("RESPONSE") / collect("THINK") never match,
+        // so the whole answer silently vanished.
+        if (state.fragments.isEmpty()) {
+            state.orphan = state.orphan + text;
+            return;
+        }
         Fragment last = state.fragments.get(state.fragments.size() - 1);
         last.content = last.content + text;
         if (state.firstTokenAt == 0 && ("RESPONSE".equals(last.type) || "THINK".equals(last.type))) {
@@ -430,6 +447,14 @@ public final class DeepSeekClient {
         StringBuilder sb = new StringBuilder();
         for (Fragment f : state.fragments) {
             if (type.equals(f.type)) sb.append(f.content);
+        }
+        // Fragments with an empty type (server sent text before any typed
+        // fragment) are normal answer text, not reasoning.
+        if ("RESPONSE".equals(type)) {
+            if (!state.orphan.isEmpty()) sb.append(state.orphan);
+            for (Fragment f : state.fragments) {
+                if (f.type == null || f.type.isEmpty()) sb.append(f.content);
+            }
         }
         return sb.toString();
     }
@@ -537,18 +562,39 @@ public final class DeepSeekClient {
     private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> COLD_STARTED =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Warm up an account in the background so the first user request does not
+     * pay for cold start + session creation. Errors are intentionally silent.
+     */
+    public void warmUpAsync() {
+        final String tok = token;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    coldStartIfNeeded();
+                    takeSession();
+                    Logs.d(Logs.UPSTREAM, TAG, "warmup done");
+                } catch (Throwable ignore) { }
+            }
+        }, "dsmod-warmup");
+        t.setDaemon(true);
+        t.start();
+    }
+
     private void coldStartIfNeeded() {
         if (!Config.coldStart) return;
         String key = token == null ? "" : token;
         if (COLD_STARTED.putIfAbsent(key, Boolean.TRUE) != null) return;
         try {
+            long t0 = System.currentTimeMillis();
             String did = didFromDevice();
             get("/api/v0/client/settings?did=" + did + "&scope=banner");
             JSONObject device = new JSONObject();
             device.put("device_id", deviceId);
             device.put("device_model", "");
             post("/api/v0/users/auth_token/check_device", device);
-            Logs.i(Logs.UPSTREAM, TAG, "coldstart ok");
+            Logs.i(Logs.UPSTREAM, TAG, "coldstart ok elapsed_ms=" + (System.currentTimeMillis() - t0));
         } catch (Throwable t) {
             Logs.w(Logs.UPSTREAM, TAG, "coldstart failed (ignored): " + t);
         }

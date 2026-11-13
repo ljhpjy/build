@@ -54,7 +54,7 @@ public final class Pow {
         return (v << n) | (v >>> (64 - n));
     }
 
-    /** Keccak-f[1600] permutation, full 24 rounds (SHA3-256). Column-major lane state. */
+    /** Keccak-f[1600] permutation, round 0 skipped (DeepSeekHashV1). Column-major lane state. */
     public static void keccakF23(long[] s) {
         long[] c = new long[5];
         long[] d = new long[5];
@@ -62,9 +62,13 @@ public final class Pow {
         keccakF23Buf(s, c, d, b);
     }
 
-    /** Same permutation with caller-provided scratch buffers (no per-call allocation). */
+    /**
+     * Same permutation with caller-provided scratch buffers (no per-call allocation).
+     * DeepSeekHashV1 skips round 0, so rounds are 1..23 (23 rounds), unlike
+     * standard SHA3-256 which runs all 24.
+     */
     private static void keccakF23Buf(long[] s, long[] c, long[] d, long[] b) {
-        for (int r = 0; r < 24; r++) {
+        for (int r = 1; r < 24; r++) {
             for (int x = 0; x < 5; x++) {
                 c[x] = s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20];
             }
@@ -162,7 +166,8 @@ public final class Pow {
                     + " expire_at=" + expireAtNet + " difficulty=" + difficulty);
             long viaHost = solveNative(challengeHex, salt, expireAtNet, difficulty);
             if (viaHost >= 0) {
-                verifyNativeAnswer(salt, expireAtNet, viaHost);
+                // The host solver already returned a server-accepted answer;
+                // do not cross-verify with our own hash (input format differs).
                 Logs.i(Logs.UPSTREAM, TAG, "pow native ok answer=" + viaHost
                         + " elapsed_ms=" + (System.currentTimeMillis() - t0));
                 return viaHost;
@@ -177,16 +182,6 @@ public final class Pow {
 
     private static String prefix8(String s) {
         return s.length() <= 8 ? s : s.substring(0, 8);
-    }
-
-    /** 用纯 Java 算法校验宿主答案，顺手验证两边算法是否一致。 */
-    private static void verifyNativeAnswer(String salt, long expireAt, long answer) {
-        try {
-            byte[] chk = hashV1((salt + "_" + expireAt + "_" + answer)
-                    .getBytes(StandardCharsets.UTF_8));
-            boolean ok = chk[0] == 0 && chk[1] == 0 && chk[2] == 0;
-            Logs.i(Logs.UPSTREAM, TAG, "pow verify " + (ok ? "ok" : "mismatch hash=" + hex(chk)));
-        } catch (Throwable ignore) { }
     }
 
     /** Native call is bounded: a hung JNI must never block the request thread. */

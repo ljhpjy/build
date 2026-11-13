@@ -176,10 +176,11 @@ async function load(){
   }
   try{
     var a = await j('/admin/api/accounts');
-    var h = '<table><thead><tr><th>#</th><th>Token</th><th>状态</th><th>请求</th><th>冷却</th><th>最后错误</th><th></th></tr></thead><tbody>';
+    var h = '<table><thead><tr><th>#</th><th>Token</th><th>状态</th><th>校验</th><th>请求</th><th>冷却</th><th>最近错误</th><th></th></tr></thead><tbody>';
     (a.accounts||[]).forEach(function(x){
       var st = x.authFailed?'<span class="tag err">已停用</span>':(x.cooldownMs>0?'<span class="tag warn">冷却中</span>':'<span class="tag ok">可用</span>');
-      h += '<tr><td>'+(x.current?'★ ':'')+x.index+'</td><td>'+esc(x.token)+'</td><td>'+st+'</td><td>'+x.requests+'</td><td>'+fmtCool(x.cooldownMs)+'</td><td>'+esc(x.lastError||'-')+'</td><td><button class="danger" onclick="removeToken('+x.index+')">删除</button></td></tr>';
+      var vv = x.verified ? ('<span class="muted">'+esc(x.verifyDetail||'')+'<br>'+fmtTime(x.lastVerifiedAt)+'</span>') : '<span class="muted">未校验</span>';
+      h += '<tr><td>'+(x.current?'★ ':'')+x.index+'</td><td>'+esc(x.token)+'</td><td>'+st+'</td><td>'+vv+'</td><td>'+x.requests+'</td><td>'+fmtCool(x.cooldownMs)+'</td><td>'+esc(x.lastError||'-')+'</td><td><button class="danger" onclick="removeToken('+x.index+')">删除</button></td></tr>';
     });
     h += '</tbody></table>';
     if(a.token_error){ h += '<p class="muted">Token 读取失败：'+esc(a.token_error)+'</p>'; }
@@ -230,13 +231,23 @@ async function removeToken(i){
 }
 
 async function verifyPool(){
-  document.getElementById('poolmsg').textContent='验证中…';
+  var pm = document.getElementById('poolmsg');
+  pm.textContent='校验中…';
   try{
     var r = await fetch('/admin/api/accounts/verify',{method:'POST',headers:gh({'Content-Type':'application/json'}),body:'{}'});
     var d = await r.json();
-    document.getElementById('poolmsg').textContent='有效 '+d.valid+' / '+d.total;
+    var bad = (d.results||[]).filter(function(x){return !x.ok;})
+        .map(function(x){return '#'+x.index+' '+x.token+' ('+x.detail+')';});
+    pm.textContent = '有效 '+d.valid+' / '+d.total + (bad.length ? '｜失败: '+bad.join(', ') : '');
     load();
-  }catch(e){ document.getElementById('poolmsg').textContent='错误: '+e; }
+  }catch(e){ pm.textContent='错误: '+e; }
+}
+
+function fmtTime(ms){
+  if(!ms) return '-';
+  var d = new Date(ms);
+  function p(n){ return n<10?'0'+n:''+n; }
+  return p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 
 async function resetCooldown(){

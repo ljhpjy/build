@@ -41,6 +41,10 @@ public final class LocalApiServer {
     private static volatile ExecutorService pool;
     private static volatile Semaphore gate = new Semaphore(Config.concurrency);
     private static volatile String deviceId = "";
+
+    static String deviceId() {
+        return deviceId == null ? "" : deviceId;
+    }
     private static volatile Context appContext;
     private static volatile long startedAtWall = 0L;
     private static final ThreadLocal<String> REQ_ID = new ThreadLocal<>();
@@ -272,9 +276,12 @@ public final class LocalApiServer {
                 JSONArray results = new JSONArray();
                 int okCount = 0;
                 for (int i = 0; i < tokens.length; i++) {
-                    Accounts.VerifyResult vr = Accounts.verify(tokens[i]);
+                    // verifyAndRecord also updates authFailed / lastError so the
+                    // status column reflects the check instead of staying stale.
+                    Accounts.VerifyResult vr = Accounts.verifyAndRecord(tokens[i]);
                     JSONObject item = new JSONObject();
                     item.put("index", i + 1);
+                    item.put("token", mask(tokens[i]));
                     item.put("ok", vr.ok);
                     item.put("detail", vr.detail);
                     results.put(item);
@@ -283,6 +290,7 @@ public final class LocalApiServer {
                 root.put("valid", okCount);
                 root.put("total", tokens.length);
                 root.put("results", results);
+                root.put("accounts", new JSONObject(Accounts.statusJson()).optJSONArray("accounts"));
                 writeJson(out, 200, root.toString());
                 return;
             }
@@ -702,10 +710,20 @@ public final class LocalApiServer {
      * with the next one inside the same request.
      */
     private static <T> T withFailover(AccountAttempt<T> attempt) throws DeepSeekClient.ApiException {
+        return withFailover(attempt, null);
+    }
+
+    /**
+     * Same as withFailover, but reuses an already picked token for the first
+     * attempt so the caller's earlier pickToken() is not wasted and the
+     * rotation pointer is not advanced twice.
+     */
+    private static <T> T withFailover(AccountAttempt<T> attempt, String presetToken)
+            throws DeepSeekClient.ApiException {
         int total = Math.max(1, Accounts.size());
         DeepSeekClient.ApiException last = null;
         for (int i = 0; i < total; i++) {
-            String token = pickToken();
+            String token = (i == 0 && presetToken != null) ? presetToken : pickToken();
             // Upstream allows only one in-flight generation per account, so
             // requests sharing a token are serialized instead of colliding
             // with "有消息正在生成".
@@ -768,7 +786,7 @@ public final class LocalApiServer {
                         return ChatRunner.run(req, tok.equals(firstTok) ? firstClient
                                 : new DeepSeekClient(tok, deviceId), ss);
                     }
-                });
+                }, firstTok);
                 if (!result.toolCalls.isEmpty()) {
                     writeToolCallChunks(out, id, model, result.toolCalls, roleSent);
                 }
@@ -873,7 +891,7 @@ public final class LocalApiServer {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
                                 : new DeepSeekClient(tok, deviceId), ss2);
                     }
-                });
+                }, firstTok);
                 writeChunk(out, "data: [DONE]\n\n");
                 endChunked(out);
                 return;
@@ -1133,7 +1151,7 @@ public final class LocalApiServer {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
                                 : new DeepSeekClient(tok, deviceId), ss3);
                     }
-                });
+                }, firstTok);
                 sse.finish(result);
                 endChunked(out);
                 return;
@@ -1549,7 +1567,7 @@ public final class LocalApiServer {
                         return ChatRunner.run(req, tok.equals(firstTok) ? client
                                 : new DeepSeekClient(tok, deviceId), ss4);
                     }
-                });
+                }, firstTok);
                 sse.finish(result);
                 endChunked(out);
                 return;

@@ -43,6 +43,8 @@ public final class Accounts {
     private static String cachedCurrent;
     private static volatile long lastTokenReadAt = 0L;
     private static volatile boolean refresherStarted = false;
+    /** 账号自动巡检间隔（10 分钟）。 */
+    private static final long VERIFY_INTERVAL_MS = 10 * 60 * 1000L;
     private static volatile String tokenError = "";
 
     private Accounts() {}
@@ -56,6 +58,8 @@ public final class Accounts {
         long lastUsedAt = 0L;
         long lastErrorAt = 0L;
         String lastError = "";
+        long lastVerifiedAt = 0L;
+        String verifyDetail = "";
     }
 
     /** Result of a live token check. */
@@ -123,6 +127,7 @@ public final class Accounts {
             POOL.add(entry);
             persist();
             Logs.i(Logs.ACCOUNT, TAG, "account captured: " + mask(token));
+            warmUp(token);
         }
     }
 
@@ -146,6 +151,39 @@ public final class Accounts {
         }, "dsmod-account-refresh");
         thread.setDaemon(true);
         thread.start();
+        startVerifier();
+    }
+
+    /** Periodically re-verify every pooled account so stale tokens get caught. */
+    private static void startVerifier() {
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(60_000L);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                while (true) {
+                    try {
+                        String[] tokens = snapshot();
+                        if (tokens.length > 0) {
+                            Logs.i(Logs.ACCOUNT, TAG, "auto verify start accounts=" + tokens.length);
+                            for (String tok : tokens) {
+                                verifyAndRecord(tok);
+                            }
+                        }
+                    } catch (Throwable ignore) { }
+                    try {
+                        Thread.sleep(VERIFY_INTERVAL_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+        }, "dsmod-account-verify");
+        t.setDaemon(true);
+        t.start();
     }
 
     /* ------------------------------------------------------------------ */
@@ -308,6 +346,38 @@ public final class Accounts {
         }
     }
 
+    /**
+     * Live check against /api/v0/users/current, and record the result into the
+     * pool entry so the UI "status" column reflects reality.
+     */
+    static VerifyResult verifyAndRecord(String token) {
+        VerifyResult vr = verify(token);
+        synchronized (LOCK) {
+            for (int i = 0; i < POOL.size(); i++) {
+                Entry e = POOL.get(i);
+                if (!e.token.equals(token)) continue;
+                long now = System.currentTimeMillis();
+                e.lastVerifiedAt = now;
+                e.verifyDetail = vr.detail;
+                if (vr.ok) {
+                    e.authFailed = false;
+                    e.cooldownUntil = 0L;
+                    e.lastError = "";
+                    e.lastErrorAt = 0L;
+                } else {
+                    e.authFailed = true;
+                    e.lastError = "verify: " + vr.detail;
+                    e.lastErrorAt = now;
+                }
+                break;
+            }
+            persist();
+        }
+        Logs.i(Logs.ACCOUNT, TAG, "verify " + mask(token) + " -> " + (vr.ok ? "ok" : "fail")
+                + " (" + vr.detail + ")");
+        return vr;
+    }
+
     /** Live check against /api/v0/users/current. */
     static VerifyResult verify(String token) {
         if (token == null || token.isEmpty()) return new VerifyResult(false, "empty token");
@@ -387,6 +457,9 @@ public final class Accounts {
                     o.put("current", cachedCurrent != null && cachedCurrent.equals(e.token));
                     o.put("lastError", e.lastError);
                     o.put("lastErrorAt", e.lastErrorAt);
+                    o.put("lastVerifiedAt", e.lastVerifiedAt);
+                    o.put("verifyDetail", e.verifyDetail);
+                    o.put("verified", e.lastVerifiedAt > 0);
                 } catch (Throwable ignore) { }
                 arr.put(o);
             }
@@ -422,6 +495,14 @@ public final class Accounts {
         synchronized (LOCK) {
             return lastPickLabel;
         }
+    }
+
+    /** Pre-warm an account (cold start + session) so the first request is fast. */
+    static void warmUp(String token) {
+        if (token == null || token.isEmpty()) return;
+        try {
+            new DeepSeekClient(token, LocalApiServer.deviceId()).warmUpAsync();
+        } catch (Throwable ignore) { }
     }
 
     private static final java.util.concurrent.ConcurrentHashMap<String, Object> LOCKS =

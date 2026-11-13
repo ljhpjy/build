@@ -440,11 +440,10 @@ public final class ChatRunner {
         result.reasoning = reply.reasoning == null ? "" : reply.reasoning;
         result.upstreamUsage = reply.usage;
 
+        // Tool calls may live in the content stream, in the thinking block, or
+        // split across both; search them independently so nothing is missed.
         List<ToolKit.Call> calls = ToolKit.parseCalls(reply.content);
-        if (calls.isEmpty()
-                && ToolKit.stripMarkup(reply.content).trim().isEmpty()
-                && !result.reasoning.isEmpty()) {
-            // DeepSeek often writes the call inside the thinking block only
+        if (calls.isEmpty() && !result.reasoning.isEmpty()) {
             calls = ToolKit.parseCalls(result.reasoning);
         }
         List<ToolKit.Call> coerced = new ArrayList<>();
@@ -457,12 +456,21 @@ public final class ChatRunner {
             coerced.add(fixed);
         }
         result.toolCalls = coerced;
-        result.content = ToolKit.stripMarkup(reply.content);
-        boolean reasoningFabricated = ToolKit.hasFabricatedProtocol(result.reasoning);
-        if (reasoningFabricated) {
-            result.reasoning = ToolKit.stripMarkup(result.reasoning);
+        String visible = ToolKit.stripMarkup(reply.content);
+        String thinking = ToolKit.stripMarkup(result.reasoning);
+        if (visible.trim().isEmpty() && thinking.isEmpty()) {
+            // Nothing visible at all: keep the raw text so the client is not
+            // handed an empty assistant message.
+            visible = reply.content == null ? "" : reply.content.trim();
         }
-        result.fabricated = ToolKit.hasFabricatedProtocol(reply.content) || reasoningFabricated;
+        result.content = visible;
+        result.reasoning = thinking;
+        result.fabricated = ToolKit.hasFabricatedProtocol(reply.content)
+                || ToolKit.hasFabricatedProtocol(reply.reasoning);
+        Logs.d(Logs.CHAT, TAG, "extract content_chars=" + result.content.length()
+                + " reasoning_chars=" + result.reasoning.length()
+                + " tool_calls=" + result.toolCalls.size()
+                + " fabricated=" + result.fabricated);
         result.elapsedMs = System.currentTimeMillis() - start;
         Logs.i(Logs.CHAT, TAG, "chat done content_chars=" + result.content.length()
                 + " reasoning_chars=" + result.reasoning.length()

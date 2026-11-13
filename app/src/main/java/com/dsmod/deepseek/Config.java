@@ -44,8 +44,8 @@ public final class Config {
     /** 号池全冷却时的最大等待，超时返回 429。 */
     public static long maxCooldownWaitMs = 5_000L;
 
-    /** 单条 prompt 上限（网页输入框 10 万字）。 */
-    public static int maxPromptChars = 100_000;
+    /** 单条 prompt 上限；超过即转附件（官方网页 10 万字，但超长单次耗时可达 30s+）。 */
+    public static int maxPromptChars = 32_000;
     /** 拆到附件的上下文上限（字符）。 */
     public static int maxAttachmentChars = 2_000_000;
     /** 超长时是否转附件；false 则直接 413。 */
