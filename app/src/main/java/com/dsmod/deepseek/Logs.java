@@ -206,6 +206,18 @@ public final class Logs {
     }
 
     private static void appendFileContent(StringBuilder sb, File f, String filter, String label) {
+        try {
+            if (f.isFile() && f.length() > 0) {
+                sb.append("===== ").append(label).append(" =====\n");
+                String[] lines = new String(readAll(f), StandardCharsets.UTF_8).split("\n", -1);
+                for (String line : lines) {
+                    if (line.isEmpty()) continue;
+                    if (filter != null && !line.contains(filter)) continue;
+                    sb.append(line).append('\n');
+                }
+            }
+        } catch (Throwable ignore) { }
+    }
 
     /**
      * Everything logged for one request id, so a single bad turn can be
@@ -228,18 +240,6 @@ public final class Logs {
             if (sb.length() > 0) sb.insert(0, "===== memory " + rid + " =====\n");
         }
         return sb.toString();
-    }
-        try {
-            if (f.isFile() && f.length() > 0) {
-                sb.append("===== ").append(label).append(" =====\n");
-                String[] lines = new String(readAll(f), StandardCharsets.UTF_8).split("\n", -1);
-                for (String line : lines) {
-                    if (line.isEmpty()) continue;
-                    if (filter != null && !line.contains(filter)) continue;
-                    sb.append(line).append('\n');
-                }
-            }
-        } catch (Throwable ignore) { }
     }
 
     public static void clear() {
